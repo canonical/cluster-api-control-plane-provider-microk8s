@@ -70,6 +70,10 @@ spec:
                       kind:
                         description: 'Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
                         type: string
+                      portCompatibilityRemap:
+                        default: true
+                        description: PortCompatibilityRemap switches the default ports used by cluster agent (25000) and dqlite (19001) to 179 and 2380. The default ports are blocked via security groups in several infra providers.
+                        type: boolean
                     type: object
                   initConfiguration:
                     properties:
@@ -80,6 +84,12 @@ spec:
                         type: array
                       apiVersion:
                         description: 'APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+                        type: string
+                      httpProxy:
+                        description: The optional http proxy configuration
+                        type: string
+                      httpsProxy:
+                        description: The optional https proxy configuration
                         type: string
                       joinTokenTTLInSecs:
                         default: 315569260
@@ -103,6 +113,9 @@ spec:
                         - host
                         - port
                         type: object
+                      noProxy:
+                        description: The optional no proxy configuration
+                        type: string
                     type: object
                 type: object
               machineTemplate:
@@ -231,7 +244,7 @@ kind: Namespace
 metadata:
   labels:
     control-plane: controller-manager
-  name: capm-system
+  name: capi-microk8s-control-plane-system
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -305,6 +318,10 @@ spec:
                       kind:
                         description: 'Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
                         type: string
+                      portCompatibilityRemap:
+                        default: true
+                        description: PortCompatibilityRemap switches the default ports used by cluster agent (25000) and dqlite (19001) to 179 and 2380. The default ports are blocked via security groups in several infra providers.
+                        type: boolean
                     type: object
                   initConfiguration:
                     properties:
@@ -315,6 +332,12 @@ spec:
                         type: array
                       apiVersion:
                         description: 'APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+                        type: string
+                      httpProxy:
+                        description: The optional http proxy configuration
+                        type: string
+                      httpsProxy:
+                        description: The optional https proxy configuration
                         type: string
                       joinTokenTTLInSecs:
                         default: 315569260
@@ -338,6 +361,9 @@ spec:
                         - host
                         - port
                         type: object
+                      noProxy:
+                        description: The optional no proxy configuration
+                        type: string
                     type: object
                 type: object
               machineTemplate:
@@ -464,14 +490,14 @@ status:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: capi-cp-provider-microk8s-controller-manager
-  namespace: capm-system
+  name: capi-microk8s-control-plane-controller-manager
+  namespace: capi-microk8s-control-plane-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: capi-cp-provider-microk8s-leader-election-role
-  namespace: capm-system
+  name: capi-microk8s-control-plane-leader-election-role
+  namespace: capi-microk8s-control-plane-system
 rules:
 - apiGroups:
   - ""
@@ -509,8 +535,8 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   creationTimestamp: null
-  name: capi-cp-provider-microk8s-manager-role
-  namespace: capm-system
+  name: capi-microk8s-control-plane-manager-role
+  namespace: capi-microk8s-control-plane-system
 rules:
 - apiGroups:
   - ""
@@ -544,7 +570,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   creationTimestamp: null
-  name: capi-cp-provider-microk8s-manager-role
+  name: capi-microk8s-control-plane-manager-role
 rules:
 - apiGroups:
   - bootstrap.cluster.x-k8s.io
@@ -606,7 +632,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: capi-cp-provider-microk8s-metrics-reader
+  name: capi-microk8s-control-plane-metrics-reader
 rules:
 - nonResourceURLs:
   - /metrics
@@ -616,7 +642,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: capi-cp-provider-microk8s-proxy-role
+  name: capi-microk8s-control-plane-proxy-role
 rules:
 - apiGroups:
   - authentication.k8s.io
@@ -634,42 +660,42 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: capi-cp-provider-microk8s-leader-election-rolebinding
-  namespace: capm-system
+  name: capi-microk8s-control-plane-leader-election-rolebinding
+  namespace: capi-microk8s-control-plane-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: capi-cp-provider-microk8s-leader-election-role
+  name: capi-microk8s-control-plane-leader-election-role
 subjects:
 - kind: ServiceAccount
-  name: capi-cp-provider-microk8s-controller-manager
-  namespace: capm-system
+  name: capi-microk8s-control-plane-controller-manager
+  namespace: capi-microk8s-control-plane-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: capi-cp-provider-microk8s-manager-rolebinding
+  name: capi-microk8s-control-plane-manager-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: capi-cp-provider-microk8s-manager-role
+  name: capi-microk8s-control-plane-manager-role
 subjects:
 - kind: ServiceAccount
-  name: capi-cp-provider-microk8s-controller-manager
-  namespace: capm-system
+  name: capi-microk8s-control-plane-controller-manager
+  namespace: capi-microk8s-control-plane-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: capi-cp-provider-microk8s-proxy-rolebinding
+  name: capi-microk8s-control-plane-proxy-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: capi-cp-provider-microk8s-proxy-role
+  name: capi-microk8s-control-plane-proxy-role
 subjects:
 - kind: ServiceAccount
-  name: capi-cp-provider-microk8s-controller-manager
-  namespace: capm-system
+  name: capi-microk8s-control-plane-controller-manager
+  namespace: capi-microk8s-control-plane-system
 ---
 apiVersion: v1
 data:
@@ -687,16 +713,16 @@ data:
       resourceName: 43109c0a.cluster.x-k8s.io
 kind: ConfigMap
 metadata:
-  name: capi-cp-provider-microk8s-manager-config
-  namespace: capm-system
+  name: capi-microk8s-control-plane-manager-config
+  namespace: capi-microk8s-control-plane-system
 ---
 apiVersion: v1
 kind: Service
 metadata:
   labels:
     control-plane: controller-manager
-  name: capi-cp-provider-microk8s-controller-manager-metrics-service
-  namespace: capm-system
+  name: capi-microk8s-control-plane-controller-manager-metrics-service
+  namespace: capi-microk8s-control-plane-system
 spec:
   ports:
   - name: https
@@ -711,8 +737,8 @@ kind: Deployment
 metadata:
   labels:
     control-plane: controller-manager
-  name: capi-cp-provider-microk8s-controller-manager
-  namespace: capm-system
+  name: capi-microk8s-control-plane-controller-manager
+  namespace: capi-microk8s-control-plane-system
 spec:
   replicas: 1
   selector:
@@ -775,5 +801,5 @@ spec:
           allowPrivilegeEscalation: false
       securityContext:
         runAsNonRoot: true
-      serviceAccountName: capi-cp-provider-microk8s-controller-manager
+      serviceAccountName: capi-microk8s-control-plane-controller-manager
       terminationGracePeriodSeconds: 10

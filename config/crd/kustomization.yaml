@@ -5,7 +5,7 @@ resources:
 - bases/controlplane.cluster.x-k8s.io_microk8scontrolplanes.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 commonLabels:
-  cluster.x-k8s.io/provider: microk8s
+  cluster.x-k8s.io/provider: control-plane-microk8s
   cluster.x-k8s.io/v1beta1: v1beta1
 
 patchesStrategicMerge:

@@ -5,7 +5,7 @@ metadata:
     controller-gen.kubebuilder.io/version: v0.8.0
   creationTimestamp: null
   labels:
-    cluster.x-k8s.io/provider: microk8s
+    cluster.x-k8s.io/provider: control-plane-microk8s
     cluster.x-k8s.io/v1beta1: v1beta1
   name: microk8scontrolplanes.controlplane.cluster.x-k8s.io
 spec:
@@ -253,7 +253,7 @@ metadata:
     controller-gen.kubebuilder.io/version: v0.8.0
   creationTimestamp: null
   labels:
-    cluster.x-k8s.io/provider: microk8s
+    cluster.x-k8s.io/provider: control-plane-microk8s
     cluster.x-k8s.io/v1beta1: v1beta1
   name: microk8scontrolplanes.controlplane.cluster.x-k8s.io
 spec:

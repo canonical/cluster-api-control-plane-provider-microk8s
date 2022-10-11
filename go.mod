@@ -3,7 +3,7 @@ module github.com/canonical/cluster-api-control-plane-provider-microk8s
 go 1.17
 
 require (
-	github.com/canonical/cluster-api-bootstrap-provider-microk8s v0.0.0-20220905082355-b1e79011304b
+	github.com/canonical/cluster-api-bootstrap-provider-microk8s v0.0.0-20221011142754-738039c7e69e
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/gomega v1.19.0
 	github.com/sirupsen/logrus v1.8.1

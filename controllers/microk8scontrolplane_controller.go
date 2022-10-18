@@ -164,6 +164,7 @@ func (r *MicroK8sControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl
 			}
 		}
 
+		res = ctrl.Result{RequeueAfter: 30 * time.Second}
 		logger.Info("successfully updated control plane status")
 	}()
 

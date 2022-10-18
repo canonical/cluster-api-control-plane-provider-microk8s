@@ -65,7 +65,7 @@ func (r *MicroK8sControlPlaneReconciler) updateStatus(ctx context.Context,
 	if err != nil {
 		log.Info("failed to update provider ID of nodes", "error", err)
 
-		return nil
+		return err
 	}
 
 	nodeSelector := labels.NewSelector()
@@ -113,7 +113,7 @@ func (r *MicroK8sControlPlaneReconciler) updateProviderID(ctx context.Context, c
 	if err != nil {
 		log.Info("failed to list nodes", "error", err)
 
-		return nil
+		return err
 	}
 
 	selector := map[string]string{

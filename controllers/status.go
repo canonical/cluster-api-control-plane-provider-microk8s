@@ -81,7 +81,7 @@ func (r *MicroK8sControlPlaneReconciler) updateStatus(ctx context.Context,
 	if err != nil {
 		log.Info("failed to list controlplane nodes", "error", err)
 
-		return nil
+		return err
 	}
 
 	for _, node := range nodes.Items {

@@ -62,7 +62,7 @@ spec:
                 description: to use for initializing and joining machines to the control plane.
                 properties:
                   clusterConfiguration:
-                    description: 'INSERT ADDITIONAL SPEC FIELDS - desired state of cluster Important: Run "make" to regenerate code after modifying this file InitConfiguration along with ClusterConfiguration are the configurations necessary for the init command'
+                    description: InitConfiguration along with ClusterConfiguration are the configurations necessary for the init command
                     properties:
                       apiVersion:
                         description: 'APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
@@ -313,7 +313,7 @@ spec:
                 description: to use for initializing and joining machines to the control plane.
                 properties:
                   clusterConfiguration:
-                    description: 'INSERT ADDITIONAL SPEC FIELDS - desired state of cluster Important: Run "make" to regenerate code after modifying this file InitConfiguration along with ClusterConfiguration are the configurations necessary for the init command'
+                    description: InitConfiguration along with ClusterConfiguration are the configurations necessary for the init command
                     properties:
                       apiVersion:
                         description: 'APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'

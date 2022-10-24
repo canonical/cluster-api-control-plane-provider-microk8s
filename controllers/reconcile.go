@@ -260,7 +260,7 @@ func (r *MicroK8sControlPlaneReconciler) bootControlPlane(ctx context.Context, c
 			Name:      names.SimpleNameGenerator.GenerateName(mcp.Name + "-"),
 			Namespace: mcp.Namespace,
 			Labels: map[string]string{
-				clusterv1.ClusterLabelName:             cluster.ClusterName,
+				clusterv1.ClusterLabelName:             cluster.Name,
 				clusterv1.MachineControlPlaneLabelName: "",
 			},
 			OwnerReferences: []metav1.OwnerReference{

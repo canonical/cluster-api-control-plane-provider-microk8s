@@ -346,6 +346,19 @@ func (r *MicroK8sControlPlaneReconciler) reconcileDelete(ctx context.Context, cl
 		}
 	}
 
+	// clean up MicroK8s cluster secrets
+	for _, secretName := range []string{"kubeconfig", "ca", "jointoken"} {
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: cluster.Namespace,
+				Name:      fmt.Sprintf("%s-%s", cluster.Name, secretName),
+			},
+		}
+		if err := r.Client.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
+			log.WithField("secret", secret.Name).WithError(err).Warn("Failed to delete secret")
+		}
+	}
+
 	conditions.MarkFalse(tcp, clusterv1beta1.ResizedCondition, clusterv1.DeletingReason, clusterv1.ConditionSeverityInfo, "")
 	// Requeue the deletion so we can check to make sure machines got cleaned up
 	return ctrl.Result{RequeueAfter: requeueDuration}, nil

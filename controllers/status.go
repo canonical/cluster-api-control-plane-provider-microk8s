@@ -6,7 +6,6 @@ import (
 	clusterv1beta1 "github.com/canonical/cluster-api-control-plane-provider-microk8s/api/v1beta1"
 
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -15,6 +14,7 @@ import (
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/conditions"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 func (r *MicroK8sControlPlaneReconciler) updateStatus(ctx context.Context,
@@ -53,9 +53,11 @@ func (r *MicroK8sControlPlaneReconciler) updateStatus(ctx context.Context,
 		return nil
 	}
 
+	logger := log.FromContext(ctx)
+
 	kubeclient, err := r.kubeconfigForCluster(ctx, util.ObjectKey(cluster))
 	if err != nil {
-		log.Info("failed to get kubeconfig for the cluster", " error ", err)
+		logger.Error(err, "failed to get kubeconfig for the cluster")
 		return nil
 	}
 
@@ -63,8 +65,7 @@ func (r *MicroK8sControlPlaneReconciler) updateStatus(ctx context.Context,
 
 	err = r.updateProviderID(ctx, util.ObjectKey(cluster), kubeclient)
 	if err != nil {
-		log.Info("failed to update provider ID of nodes", "error", err)
-
+		logger.Error(err, "failed to update provider ID of nodes")
 		return err
 	}
 
@@ -79,8 +80,7 @@ func (r *MicroK8sControlPlaneReconciler) updateStatus(ctx context.Context,
 	})
 
 	if err != nil {
-		log.Info("failed to list controlplane nodes", "error", err)
-
+		logger.Error(err, "failed to list controlplane nodes")
 		return err
 	}
 
@@ -101,18 +101,18 @@ func (r *MicroK8sControlPlaneReconciler) updateStatus(ctx context.Context,
 		mcp.Status.Ready = true
 	}
 
-	log.Info("ready replicas", " count ", mcp.Status.ReadyReplicas)
+	logger.WithValues("count", mcp.Status.ReadyReplicas).Info("ready replicas")
 
 	return nil
 }
 
 func (r *MicroK8sControlPlaneReconciler) updateProviderID(ctx context.Context, cluster client.ObjectKey, kubeclient *kubernetesClient) error {
-
 	nodes, err := kubeclient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 
-	if err != nil {
-		log.Info("failed to list nodes", "error", err)
+	logger := log.FromContext(ctx)
 
+	if err != nil {
+		logger.Error(err, "failed to list nodes")
 		return err
 	}
 
@@ -140,7 +140,7 @@ func (r *MicroK8sControlPlaneReconciler) updateProviderID(ctx context.Context, c
 				node.Spec.ProviderID = *machine.Spec.ProviderID
 				_, err := kubeclient.CoreV1().Nodes().Update(ctx, &node, metav1.UpdateOptions{})
 				if err != nil {
-					log.Info("failed to update node", " error ", err)
+					logger.Error(err, "failed to update node")
 					return err
 				}
 				break

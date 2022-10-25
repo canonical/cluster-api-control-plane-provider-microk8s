@@ -9,7 +9,6 @@ import (
 	clusterv1beta1 "github.com/canonical/cluster-api-control-plane-provider-microk8s/api/v1beta1"
 
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,6 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 type errServiceUnhealthy struct {
@@ -34,9 +34,10 @@ func (e *errServiceUnhealthy) Error() string {
 	return fmt.Sprintf("Service %s is unhealthy: %s", e.service, e.reason)
 }
 
-func (r *MicroK8sControlPlaneReconciler) reconcile(ctx context.Context,
-	cluster *clusterv1.Cluster, tcp *clusterv1beta1.MicroK8sControlPlane) (res ctrl.Result, err error) {
-	log.Info("reconcile MicroK8sControlPlane")
+func (r *MicroK8sControlPlaneReconciler) reconcile(ctx context.Context, cluster *clusterv1.Cluster, tcp *clusterv1beta1.MicroK8sControlPlane) (res ctrl.Result, err error) {
+	logger := log.FromContext(ctx)
+
+	logger.Info("reconcile MicroK8sControlPlane")
 
 	// Update ownerrefs on infra templates
 	if err := r.reconcileExternalReference(ctx, tcp.Spec.InfrastructureTemplate, cluster); err != nil {
@@ -45,14 +46,14 @@ func (r *MicroK8sControlPlaneReconciler) reconcile(ctx context.Context,
 
 	// If ControlPlaneEndpoint is not set, return early
 	if !cluster.Spec.ControlPlaneEndpoint.IsValid() {
-		log.Info("cluster does not yet have a ControlPlaneEndpoint defined")
+		logger.Info("cluster does not yet have a ControlPlaneEndpoint defined")
 		return ctrl.Result{}, nil
 	}
 
 	// TODO: handle proper adoption of Machines
 	ownedMachines, err := r.getControlPlaneMachinesForCluster(ctx, util.ObjectKey(cluster), tcp.Name)
 	if err != nil {
-		log.Error(err, "failed to retrieve control plane machines for cluster")
+		logger.Error(err, "failed to retrieve control plane machines for cluster")
 		return ctrl.Result{}, err
 	}
 
@@ -123,11 +124,13 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context,
 
 	controlPlane := r.newControlPlane(cluster, mcp, machines)
 
+	logger := log.FromContext(ctx).WithValues("desired", desiredReplicas, "existing", numMachines)
+
 	switch {
 	// We are creating the first replica
 	case numMachines < desiredReplicas && numMachines == 0:
 		// Create new Machine w/ init
-		log.Info("initializing control plane", "Desired", desiredReplicas, "Existing", numMachines)
+		logger.Info("initializing control plane")
 
 		return r.bootControlPlane(ctx, cluster, mcp, controlPlane, true)
 	// We are scaling up
@@ -136,7 +139,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context,
 			"Scaling up control plane to %d replicas (actual %d)", desiredReplicas, numMachines)
 
 		// Create a new Machine w/ join
-		log.Info("scaling up control plane", "Desired", desiredReplicas, "Existing", numMachines)
+		logger.Info("scaling up control plane")
 
 		return r.bootControlPlane(ctx, cluster, mcp, controlPlane, false)
 	// We are scaling down
@@ -153,18 +156,16 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context,
 		}
 
 		if err := r.ensureNodesBooted(ctx, controlPlane.MCP, cluster, machines); err != nil {
-			log.Info("waiting for all nodes to finish boot sequence", "error", err)
-
+			logger.Error(err, "waiting for all nodes to finish boot sequence")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
-		log.Info("scaling down control plane", "Desired", desiredReplicas, "Existing", numMachines)
+		logger.Info("scaling down control plane")
 
 		res, err = r.scaleDownControlPlane(ctx, mcp, util.ObjectKey(cluster), controlPlane.MCP.Name, machines)
 		if err != nil {
 			if res.Requeue || res.RequeueAfter > 0 {
-				log.Info("failed to scale down control plane", "error", err)
-
+				logger.Error(err, "failed to scale down control plane")
 				return res, nil
 			}
 		}
@@ -175,7 +176,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context,
 			if err := r.bootstrapCluster(ctx, mcp, cluster, machines); err != nil {
 				conditions.MarkFalse(mcp, clusterv1beta1.MachinesBootstrapped, clusterv1beta1.WaitingForMicroK8sBootReason, clusterv1.ConditionSeverityInfo, err.Error())
 
-				log.Info("bootstrap failed, retrying in 20 seconds", "error", err)
+				logger.Error(err, "bootstrap failed, retrying in 20 seconds")
 
 				return ctrl.Result{RequeueAfter: time.Second * 20}, nil
 			}
@@ -386,7 +387,8 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 		return ctrl.Result{}, fmt.Errorf("no machines found")
 	}
 
-	log.Info("Found control plane machines", "machines", len(machines))
+	logger := log.FromContext(ctx)
+	logger.WithValues("machines", len(machines)).Info("found control plane machines")
 
 	kubeclient, err := r.kubeconfigForCluster(ctx, cluster)
 	if err != nil {
@@ -399,8 +401,9 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 	machine := machines[len(machines)-1]
 	for i := len(machines) - 1; i >= 0; i-- {
 		machine = machines[i]
+		logger := logger.WithValues("machineName", machine.Name)
 		if !machine.ObjectMeta.DeletionTimestamp.IsZero() {
-			log.Info("machine is in process of deletion", "machine", machine.Name)
+			logger.Info("machine is in process of deletion")
 
 			node, err := kubeclient.CoreV1().Nodes().Get(ctx, machine.Status.NodeRef.Name, metav1.GetOptions{})
 			if err != nil {
@@ -413,7 +416,7 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 			}
 
 			// TODO: drain and cordon the node
-			log.Info("Deleting node", "machine", machine.Name, "node", node.Name)
+			logger.WithValues("nodeName", node.Name).Info("deleting node")
 
 			err = kubeclient.CoreV1().Nodes().Delete(ctx, node.Name, metav1.DeleteOptions{})
 			if err != nil {
@@ -425,8 +428,7 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 
 		// do not allow scaling down until all nodes have nodeRefs
 		if machine.Status.NodeRef == nil {
-			log.Info("one of machines does not have NodeRef", "machine", machine.Name)
-
+			logger.Info("one of machines does not have NodeRef")
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
@@ -441,15 +443,15 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 
 	node := deleteMachine.Status.NodeRef
 
-	log.Info("deleting machine", "machine", deleteMachine.Name, "node", node.Name)
+	logger = logger.WithValues("machineName", deleteMachine.Name, "nodeName", node.Name)
+	logger.Info("deleting machine")
 
 	err = r.Client.Delete(ctx, &deleteMachine)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	log.Info("deleting node", "machine", deleteMachine.Name, "node", node.Name)
-
+	logger.Info("deleting node")
 	err = kubeclient.CoreV1().Nodes().Delete(ctx, node.Name, metav1.DeleteOptions{})
 	if err != nil {
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, err

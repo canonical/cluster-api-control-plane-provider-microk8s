@@ -6,7 +6,6 @@ require (
 	github.com/canonical/cluster-api-bootstrap-provider-microk8s v0.2.4
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/gomega v1.22.1
-	github.com/sirupsen/logrus v1.9.0
 	k8s.io/api v0.25.3
 	k8s.io/apimachinery v0.25.3
 	k8s.io/apiserver v0.25.3

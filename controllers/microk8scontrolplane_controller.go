@@ -105,6 +105,8 @@ func (r *MicroK8sControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 	logger = logger.WithValues("cluster", cluster.Name)
 
+	ctx = log.IntoContext(ctx, logger)
+
 	if annotations.IsPaused(cluster, mcp) {
 		logger.Info("reconciliation is paused for this object")
 		return ctrl.Result{Requeue: true}, nil

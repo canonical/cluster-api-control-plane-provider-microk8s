@@ -115,8 +115,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileNodeHealth(ctx context.Context
 	return ctrl.Result{}, nil
 }
 
-func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context,
-	cluster *clusterv1.Cluster, mcp *clusterv1beta1.MicroK8sControlPlane, machines []clusterv1.Machine) (res ctrl.Result, err error) {
+func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, cluster *clusterv1.Cluster, mcp *clusterv1beta1.MicroK8sControlPlane, machines []clusterv1.Machine) (res ctrl.Result, err error) {
 
 	// If we've made it this far, we can assume that all ownedMachines are up to date
 	numMachines := len(machines)
@@ -217,8 +216,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileExternalReference(ctx context.
 	return objPatchHelper.Patch(ctx, obj)
 }
 
-func (r *MicroK8sControlPlaneReconciler) bootControlPlane(ctx context.Context, cluster *clusterv1.Cluster, mcp *clusterv1beta1.MicroK8sControlPlane,
-	controlPlane *ControlPlane, first bool) (ctrl.Result, error) {
+func (r *MicroK8sControlPlaneReconciler) bootControlPlane(ctx context.Context, cluster *clusterv1.Cluster, mcp *clusterv1beta1.MicroK8sControlPlane, controlPlane *ControlPlane, first bool) (ctrl.Result, error) {
 	// Since the cloned resource should eventually have a controller ref for the Machine, we create an
 	// OwnerReference here without the Controller field set
 	infraCloneOwner := &metav1.OwnerReference{
@@ -295,8 +293,7 @@ func (r *MicroK8sControlPlaneReconciler) bootControlPlane(ctx context.Context, c
 	return ctrl.Result{Requeue: true}, nil
 }
 
-func (r *MicroK8sControlPlaneReconciler) reconcileConditions(ctx context.Context, cluster *clusterv1.Cluster, tcp *clusterv1beta1.MicroK8sControlPlane,
-	machines []clusterv1.Machine) (result ctrl.Result, err error) {
+func (r *MicroK8sControlPlaneReconciler) reconcileConditions(ctx context.Context, cluster *clusterv1.Cluster, tcp *clusterv1beta1.MicroK8sControlPlane, machines []clusterv1.Machine) (result ctrl.Result, err error) {
 	if !conditions.Has(tcp, clusterv1beta1.AvailableCondition) {
 		conditions.MarkFalse(tcp, clusterv1beta1.AvailableCondition, clusterv1beta1.WaitingForMicroK8sBootReason, clusterv1.ConditionSeverityInfo, "")
 	}
@@ -321,8 +318,7 @@ func (r *MicroK8sControlPlaneReconciler) getFailureDomain(ctx context.Context, c
 	return retList
 }
 
-func (r *MicroK8sControlPlaneReconciler) reconcileDelete(ctx context.Context, cluster *clusterv1.Cluster,
-	tcp *clusterv1beta1.MicroK8sControlPlane) (ctrl.Result, error) {
+func (r *MicroK8sControlPlaneReconciler) reconcileDelete(ctx context.Context, cluster *clusterv1.Cluster, tcp *clusterv1beta1.MicroK8sControlPlane) (ctrl.Result, error) {
 	// Get list of all control plane machines
 	ownedMachines, err := r.getControlPlaneMachinesForCluster(ctx, util.ObjectKey(cluster), tcp.Name)
 	if err != nil {
@@ -352,8 +348,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileDelete(ctx context.Context, cl
 	return ctrl.Result{RequeueAfter: requeueDuration}, nil
 }
 
-func (r *MicroK8sControlPlaneReconciler) bootstrapCluster(ctx context.Context, tcp *clusterv1beta1.MicroK8sControlPlane,
-	cluster *clusterv1.Cluster, machines []clusterv1.Machine) error {
+func (r *MicroK8sControlPlaneReconciler) bootstrapCluster(ctx context.Context, tcp *clusterv1beta1.MicroK8sControlPlane, cluster *clusterv1.Cluster, machines []clusterv1.Machine) error {
 
 	addresses := []string{}
 	for _, machine := range machines {
@@ -381,8 +376,7 @@ func (r *MicroK8sControlPlaneReconciler) bootstrapCluster(ctx context.Context, t
 	return nil
 }
 
-func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Context, tcp *clusterv1beta1.MicroK8sControlPlane,
-	cluster client.ObjectKey, cpName string, machines []clusterv1.Machine) (ctrl.Result, error) {
+func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Context, tcp *clusterv1beta1.MicroK8sControlPlane, cluster client.ObjectKey, cpName string, machines []clusterv1.Machine) (ctrl.Result, error) {
 	if len(machines) == 0 {
 		return ctrl.Result{}, fmt.Errorf("no machines found")
 	}

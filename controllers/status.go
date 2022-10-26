@@ -17,8 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-func (r *MicroK8sControlPlaneReconciler) updateStatus(ctx context.Context,
-	mcp *clusterv1beta1.MicroK8sControlPlane, cluster *clusterv1.Cluster) error {
+func (r *MicroK8sControlPlaneReconciler) updateStatus(ctx context.Context, mcp *clusterv1beta1.MicroK8sControlPlane, cluster *clusterv1.Cluster) error {
 	clusterSelector := &metav1.LabelSelector{
 		MatchLabels: map[string]string{
 			clusterv1.ClusterLabelName:             cluster.Name,

@@ -20,6 +20,7 @@ import (
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/storage/names"
@@ -78,18 +79,17 @@ func (r *MicroK8sControlPlaneReconciler) kubeconfigForCluster(ctx context.Contex
 	kubeconfigSecret := &corev1.Secret{}
 
 	// See if the kubeconfig exists. If not create it.
-	secrets := &corev1.SecretList{}
-	err := r.Client.List(ctx, secrets)
-	if err != nil {
+	err := r.Client.Get(ctx,
+		types.NamespacedName{
+			Namespace: cluster.Namespace,
+			Name:      cluster.Name + "-kubeconfig",
+		},
+		kubeconfigSecret,
+	)
+	if err != nil && !apierrors.IsNotFound(err) {
 		return nil, err
 	}
-
-	found := false
-	for _, s := range secrets.Items {
-		if s.Name == cluster.Name+"-kubeconfig" {
-			found = true
-		}
-	}
+	found := apierrors.IsNotFound(err)
 
 	c := &clusterv1.Cluster{}
 	err = r.Client.Get(ctx, cluster, c)
@@ -233,8 +233,7 @@ func (r *MicroK8sControlPlaneReconciler) genarateKubeconfig(ctx context.Context,
 	return &config, nil
 }
 
-func (r *MicroK8sControlPlaneReconciler) generateMicroK8sConfig(ctx context.Context, tcp *clusterv1beta1.MicroK8sControlPlane,
-	cluster *clusterv1.Cluster, spec *bootstrapv1beta1.MicroK8sConfigSpec) (*corev1.ObjectReference, error) {
+func (r *MicroK8sControlPlaneReconciler) generateMicroK8sConfig(ctx context.Context, tcp *clusterv1beta1.MicroK8sControlPlane, cluster *clusterv1.Cluster, spec *bootstrapv1beta1.MicroK8sConfigSpec) (*corev1.ObjectReference, error) {
 	owner := metav1.OwnerReference{
 		APIVersion:         clusterv1beta1.GroupVersion.String(),
 		Kind:               "MicroK8sControlPlane",

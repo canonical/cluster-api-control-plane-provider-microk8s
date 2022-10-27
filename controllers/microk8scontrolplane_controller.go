@@ -25,7 +25,6 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/annotations"
@@ -86,7 +85,6 @@ func (r *MicroK8sControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// TODO(user): your logic here
 	// Fetch the Cluster.
 	cluster, err := util.GetOwnerCluster(ctx, r.Client, mcp.ObjectMeta)
 	if err != nil {
@@ -147,25 +145,15 @@ func (r *MicroK8sControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl
 		// Always attempt to update status.
 		if err := r.updateStatus(ctx, mcp, cluster); err != nil {
 			logger.Error(err, "failed to update MicroK8sControlPlane Status")
-
-			reterr = kerrors.NewAggregate([]error{reterr, err})
 		}
 
 		// Always attempt to Patch the MicroK8sControlPlane object and status after each reconciliation.
 		if err := patchMicroK8sControlPlane(ctx, patchHelper, mcp, patch.WithStatusObservedGeneration{}); err != nil {
 			logger.Error(err, "failed to patch MicroK8sControlPlane")
-			reterr = kerrors.NewAggregate([]error{reterr, err})
 		}
 
-		// TODO: remove this as soon as we have a proper remote cluster cache in place.
-		// Make TCP to requeue in case status is not ready, so we can check for node status without waiting for a full resync (by default 10 minutes).
-		// Only requeue if we are not going in exponential backoff due to error, or if we are not already re-queueing, or if the object has a deletion timestamp.
-		if reterr == nil && !res.Requeue && res.RequeueAfter <= 0 && mcp.ObjectMeta.DeletionTimestamp.IsZero() {
-			if !mcp.Status.Ready || mcp.Status.UnavailableReplicas > 0 {
-				res = ctrl.Result{RequeueAfter: 20 * time.Second}
-			}
-		}
-
+		// Requeue the MicroK8sControlPlane after every 30 seconds.
+		// This takes care of the default case where we need to requeue and get the status even when the node isn't yet ready.
 		res = ctrl.Result{RequeueAfter: 30 * time.Second}
 		logger.Info("successfully updated control plane status")
 	}()

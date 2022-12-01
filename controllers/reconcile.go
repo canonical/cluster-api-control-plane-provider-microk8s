@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"sort"
 	"time"
 
 	clusterv1beta1 "github.com/canonical/cluster-api-control-plane-provider-microk8s/api/v1beta1"
+	"golang.org/x/mod/semver"
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
@@ -123,6 +125,36 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 
 	controlPlane := r.newControlPlane(cluster, mcp, machines)
 
+	var oldVersionMachines []clusterv1.Machine
+
+	// Assumption: The newer machines are appended at the end of the
+	// machines list, due to list being sorted by creation timestamp.
+	// So we take the version at the beginning of the
+	// list to be the older version and version at the end to be the
+	// newer version. This takes care of the following cases:
+	//
+	// 1) During initialisation: All machines have same version, so no
+	// need to find older machines for scaing down.
+	//
+	// 2) When normal scaling/no upgrades: Similar to 1st case, during
+	// normal scaling, all machines have same version.
+	//
+	// 3) When version is changed in b/w upgrades: During this case,
+	// the latest version of machines will be scaled up and all the
+	// older versions will be scaled down.
+	if numMachines == desiredReplicas && numMachines > 0 {
+		sort.Sort(SortByCreationTimestamp(machines))
+		oldVersion := semver.MajorMinor(*machines[0].Spec.Version)
+		newVersion := semver.MajorMinor(*machines[numMachines-1].Spec.Version)
+
+		for idx := 0; idx < numMachines; idx++ {
+			if semver.Compare(oldVersion, newVersion) != 0 {
+				oldVersionMachines = append(oldVersionMachines, machines[idx])
+				break
+			}
+		}
+	}
+
 	logger := log.FromContext(ctx).WithValues("desired", desiredReplicas, "existing", numMachines)
 
 	switch {
@@ -141,8 +173,8 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 		logger.Info("scaling up control plane")
 
 		return r.bootControlPlane(ctx, cluster, mcp, controlPlane, false)
-	// We are scaling down
-	case numMachines > desiredReplicas:
+	// We are scaling down or rolling out a new version
+	case numMachines > desiredReplicas || len(oldVersionMachines) > 0:
 		conditions.MarkFalse(mcp, clusterv1beta1.ResizedCondition, clusterv1beta1.ScalingDownReason, clusterv1.ConditionSeverityWarning,
 			"Scaling down control plane to %d replicas (actual %d)",
 			desiredReplicas, numMachines)
@@ -161,14 +193,23 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 
 		logger.Info("scaling down control plane")
 
-		res, err = r.scaleDownControlPlane(ctx, mcp, util.ObjectKey(cluster), controlPlane.MCP.Name, machines)
-		if err != nil {
-			if res.Requeue || res.RequeueAfter > 0 {
-				logger.Error(err, "failed to scale down control plane")
-				return res, nil
+		if len(oldVersionMachines) > 0 {
+			res, err = r.scaleDownControlPlane(ctx, mcp, util.ObjectKey(cluster), controlPlane.MCP.Name, oldVersionMachines)
+			if err != nil {
+				if res.Requeue || res.RequeueAfter > 0 {
+					logger.Error(err, "failed to scale down older versions of control plane")
+					return res, nil
+				}
+			}
+		} else {
+			res, err = r.scaleDownControlPlane(ctx, mcp, util.ObjectKey(cluster), controlPlane.MCP.Name, machines)
+			if err != nil {
+				if res.Requeue || res.RequeueAfter > 0 {
+					logger.Error(err, "failed to scale down control plane")
+					return res, nil
+				}
 			}
 		}
-
 		return res, err
 	default:
 		if !mcp.Status.Bootstrapped {
@@ -439,6 +480,7 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
+		// mark the oldest machine to be deleted first
 		if machine.CreationTimestamp.Before(&deleteMachine.CreationTimestamp) {
 			deleteMachine = machine
 		}

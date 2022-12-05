@@ -185,7 +185,7 @@ func (r *MicroK8sControlPlaneReconciler) genarateKubeconfig(ctx context.Context,
 	cert := &x509.Certificate{
 		SerialNumber: big.NewInt(2019),
 		Subject: pkix.Name{
-			Organization:  []string{"Canonical"},
+			Organization:  []string{"admin", "system:masters"},
 			Country:       []string{"GB"},
 			Province:      []string{""},
 			Locality:      []string{"Canonical"},

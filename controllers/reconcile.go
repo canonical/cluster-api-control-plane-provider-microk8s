@@ -125,7 +125,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 
 	controlPlane := r.newControlPlane(cluster, mcp, machines)
 
-	var oldVersionMachines []clusterv1.Machine
+	logger := log.FromContext(ctx).WithValues("desired", desiredReplicas, "existing", numMachines)
 
 	// Assumption: The newer machines are appended at the end of the
 	// machines list, due to list being sorted by creation timestamp.
@@ -142,20 +142,35 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 	// 3) When version is changed in b/w upgrades: During this case,
 	// the latest version of machines will be scaled up and all the
 	// older versions will be scaled down.
-	if numMachines == desiredReplicas && numMachines > 0 {
-		sort.Sort(SortByCreationTimestamp(machines))
-		oldVersion := semver.MajorMinor(*machines[0].Spec.Version)
-		newVersion := semver.MajorMinor(*machines[numMachines-1].Spec.Version)
 
-		for idx := 0; idx < numMachines; idx++ {
-			if semver.Compare(oldVersion, newVersion) != 0 {
-				oldVersionMachines = append(oldVersionMachines, machines[idx])
-				break
-			}
-		}
+	var oldVersionMachines []clusterv1.Machine
+	var oldVersion, newVersion string
+
+	if len(machines) > 0 {
+		sort.Sort(SortByCreationTimestamp(machines))
+		oldVersion = semver.MajorMinor(*machines[0].Spec.Version)
+		newVersion = semver.MajorMinor(mcp.Spec.Version)
 	}
 
-	logger := log.FromContext(ctx).WithValues("desired", desiredReplicas, "existing", numMachines)
+	if oldVersion != "" && semver.Compare(oldVersion, newVersion) != 0 {
+
+		oldVersionMachines = append(oldVersionMachines, machines[0])
+
+		// We have a old machine, so we create a new one to increase
+		// the number of machines to one more than the desired number.
+		// This will create an imbalance of one machine and they will
+		// be scaled down to the desired number in the next reconcile.
+
+		if numMachines == desiredReplicas && len(oldVersionMachines) > 0 {
+			conditions.MarkFalse(mcp, clusterv1beta1.ResizedCondition, clusterv1beta1.ScalingUpReason, clusterv1.ConditionSeverityWarning,
+				"Scaling up control plane to %d replicas (actual %d)", desiredReplicas, numMachines)
+
+			// Create a new machine
+			logger.Info("Creating a new node")
+
+			return r.bootControlPlane(ctx, cluster, mcp, controlPlane, false)
+		}
+	}
 
 	switch {
 	// We are creating the first replica
@@ -210,6 +225,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 				}
 			}
 		}
+
 		return res, err
 	default:
 		if !mcp.Status.Bootstrapped {

@@ -146,7 +146,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 	var oldVersionMachines []clusterv1.Machine
 	var oldVersion, newVersion string
 
-	if len(machines) > 0 {
+	if numMachines > 0 {
 		sort.Sort(SortByCreationTimestamp(machines))
 		oldVersion = semver.MajorMinor(*machines[0].Spec.Version)
 		newVersion = semver.MajorMinor(mcp.Spec.Version)

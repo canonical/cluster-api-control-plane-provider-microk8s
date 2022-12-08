@@ -188,8 +188,8 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 		logger.Info("scaling up control plane")
 
 		return r.bootControlPlane(ctx, cluster, mcp, controlPlane, false)
-	// We are scaling down or rolling out a new version
-	case numMachines > desiredReplicas || len(oldVersionMachines) > 0:
+	// We are scaling down
+	case numMachines > desiredReplicas:
 		conditions.MarkFalse(mcp, clusterv1beta1.ResizedCondition, clusterv1beta1.ScalingDownReason, clusterv1.ConditionSeverityWarning,
 			"Scaling down control plane to %d replicas (actual %d)",
 			desiredReplicas, numMachines)
@@ -208,21 +208,11 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 
 		logger.Info("scaling down control plane")
 
-		if len(oldVersionMachines) > 0 {
-			res, err = r.scaleDownControlPlane(ctx, mcp, util.ObjectKey(cluster), controlPlane.MCP.Name, oldVersionMachines)
-			if err != nil {
-				if res.Requeue || res.RequeueAfter > 0 {
-					logger.Error(err, "failed to scale down older versions of control plane")
-					return res, nil
-				}
-			}
-		} else {
-			res, err = r.scaleDownControlPlane(ctx, mcp, util.ObjectKey(cluster), controlPlane.MCP.Name, machines)
-			if err != nil {
-				if res.Requeue || res.RequeueAfter > 0 {
-					logger.Error(err, "failed to scale down control plane")
-					return res, nil
-				}
+		res, err = r.scaleDownControlPlane(ctx, mcp, util.ObjectKey(cluster), controlPlane.MCP.Name, machines)
+		if err != nil {
+			if res.Requeue || res.RequeueAfter > 0 {
+				logger.Error(err, "failed to scale down control plane")
+				return res, nil
 			}
 		}
 

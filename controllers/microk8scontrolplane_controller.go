@@ -57,7 +57,7 @@ type MicroK8sControlPlaneReconciler struct {
 }
 
 // +kubebuilder:rbac:groups=core,resources=events,verbs=get;list;watch;create;patch
-// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;patch
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=core,resources=configmaps,namespace=kube-system,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=rbac,resources=roles,namespace=kube-system,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=rbac,resources=rolebindings,namespace=kube-system,verbs=get;list;watch;create

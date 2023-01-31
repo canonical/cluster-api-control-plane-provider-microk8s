@@ -23,12 +23,26 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 )
 
+// UpgradeStrategyType is a string representing the upgrade strategy.
+type UpgradeStrategyType string
+
+const (
+	// InPlaceUpgradeStrategyType is an upgrade strategy that
+	// performs an in-place upgrade of the control plane.
+	InPlaceUpgradeStrategyType UpgradeStrategyType = "InPlaceUpgrade"
+
+	// RollingUpdateStrategyType is an upgrade strategy that
+	// deletes the current control plane machine before creating
+	// a new one.
+	RollingUpgradeStrategyType UpgradeStrategyType = "RollingUpgrade"
+)
+
 const (
 	MicroK8sControlPlaneFinalizer = "microk8s.controlplane.cluster.x-k8s.io"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// MachineTemplate defines the metadata and infrastructure information
+// for control plane machines.
 type MachineTemplate struct {
 	// InfrastructureTemplate is a required reference to a custom resource
 	// offered by an infrastructure provider.
@@ -37,9 +51,7 @@ type MachineTemplate struct {
 
 // MicroK8sControlPlaneSpec defines the desired state of MicroK8sControlPlane
 type MicroK8sControlPlaneSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
+	// Replicas is the desired number of control-plane machine replicas.
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
 
@@ -48,9 +60,19 @@ type MicroK8sControlPlaneSpec struct {
 	// +kubebuilder:validation:Pattern:=^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)([-0-9a-zA-Z_\.+]*)?$
 	Version string `json:"version"`
 
+	// MachineTemplate is the machine template to be used for
+	// creating control plane machines.
 	MachineTemplate `json:"machineTemplate"`
 
-	// to use for initializing and joining machines to the control plane.
+	// UpgradeStrategy describes how to replace existing machines
+	// with new ones.
+	// Values can be: InPlaceUpgrade or RollingUpgrade.
+	// +optional
+	// +kubebuilder:validation:Enum=InPlaceUpgrade;RollingUpgrade
+	UpgradeStrategy UpgradeStrategyType `json:"upgradeStrategy"`
+
+	// ControlPlaneConfig is the reference configs to be used for initializing and joining
+	// machines to the control plane.
 	// +optional
 	ControlPlaneConfig v1beta1.MicroK8sConfigSpec `json:"controlPlaneConfig,omitempty"`
 }

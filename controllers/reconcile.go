@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"strings"
 	"time"
 
 	clusterv1beta1 "github.com/canonical/cluster-api-control-plane-provider-microk8s/api/v1beta1"
@@ -77,10 +78,8 @@ func (r *MicroK8sControlPlaneReconciler) reconcile(ctx context.Context, cluster 
 	// run all similar reconcile steps in the loop and pick the lowest RetryAfter, aggregate errors and check the requeue flags.
 	for _, phase := range []func(context.Context, *clusterv1.Cluster, *clusterv1beta1.MicroK8sControlPlane,
 		[]clusterv1.Machine) (ctrl.Result, error){
-		// r.reconcileEtcdMembers,
 		r.reconcileNodeHealth,
 		r.reconcileConditions,
-		// r.reconcileKubeconfig,
 		r.reconcileMachines,
 	} {
 		phaseResult, err = phase(ctx, cluster, tcp, ownedMachines)
@@ -127,22 +126,6 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 
 	logger := log.FromContext(ctx).WithValues("desired", desiredReplicas, "existing", numMachines)
 
-	// Assumption: The newer machines are appended at the end of the
-	// machines list, due to list being sorted by creation timestamp.
-	// So we take the version at the beginning of the
-	// list to be the older version and version at the end to be the
-	// newer version. This takes care of the following cases:
-	//
-	// 1) During initialisation: All machines have same version, so no
-	// need to find older machines for scaing down.
-	//
-	// 2) When normal scaling/no upgrades: Similar to 1st case, during
-	// normal scaling, all machines have same version.
-	//
-	// 3) When version is changed in b/w upgrades: During this case,
-	// the latest version of machines will be scaled up and all the
-	// older versions will be scaled down.
-
 	var oldVersionMachines []clusterv1.Machine
 	var oldVersion, newVersion string
 
@@ -153,23 +136,99 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 	}
 
 	if oldVersion != "" && semver.Compare(oldVersion, newVersion) != 0 {
+		if mcp.Spec.UpgradeStrategy == clusterv1beta1.RollingUpgradeStrategyType {
 
-		oldVersionMachines = append(oldVersionMachines, machines[0])
+			// Assumption: The newer machines are appended at the end of the
+			// machines list, due to list being sorted by creation timestamp.
+			// So we take the version at the beginning of the
+			// list to be the older version and version at the end to be the
+			// newer version. This takes care of the following cases:
+			//
+			// 1) During initialisation: All machines have same version, so no
+			// need to find older machines for scaing down.
+			//
+			// 2) When normal scaling/no upgrades: Similar to 1st case, during
+			// normal scaling, all machines have same version.
+			//
+			// 3) When version is changed in b/w upgrades: During this case,
+			// the latest version of machines will be scaled up and all the
+			// older versions will be scaled down.
 
-		// We have a old machine, so we create a new one to increase
-		// the number of machines to one more than the desired number.
-		// This will create an imbalance of one machine and they will
-		// be scaled down to the desired number in the next reconcile.
+			oldVersionMachines = append(oldVersionMachines, machines[0])
 
-		if numMachines == desiredReplicas && len(oldVersionMachines) > 0 {
-			conditions.MarkFalse(mcp, clusterv1beta1.ResizedCondition, clusterv1beta1.ScalingUpReason, clusterv1.ConditionSeverityWarning,
-				"Scaling up control plane to %d replicas (actual %d)", desiredReplicas, numMachines)
+			// We have a old machine, so we create a new one to increase
+			// the number of machines to one more than the desired number.
+			// This will create an imbalance of one machine and they will
+			// be scaled down to the desired number in the next reconcile.
 
-			// Create a new machine
-			logger.Info("Creating a new node")
+			if numMachines == desiredReplicas && len(oldVersionMachines) > 0 {
+				conditions.MarkFalse(mcp, clusterv1beta1.ResizedCondition, clusterv1beta1.ScalingUpReason, clusterv1.ConditionSeverityWarning,
+					"Scaling up control plane to %d replicas (actual %d)", desiredReplicas, numMachines)
 
-			return r.bootControlPlane(ctx, cluster, mcp, controlPlane, false)
+				// Create a new machine
+				logger.Info("Creating a new node")
+
+				return r.bootControlPlane(ctx, cluster, mcp, controlPlane, false)
+			}
+		} else if mcp.Spec.UpgradeStrategy == clusterv1beta1.InPlaceUpgradeStrategyType {
+
+			// Make a client that interacts with the workload cluster.
+			kubeclient, err := r.kubeconfigForCluster(ctx, util.ObjectKey(cluster))
+			if err != nil {
+				return ctrl.Result{RequeueAfter: 20 * time.Second}, err
+			}
+
+			defer kubeclient.Close() //nolint:errcheck
+
+			// Get a list of nodes
+			nodes, err := kubeclient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+			if err != nil {
+				return ctrl.Result{RequeueAfter: 20 * time.Second}, err
+			}
+
+			for _, node := range nodes.Items {
+				fmt.Printf("Upgrading %s...\n", node.Name)
+
+				fmt.Printf("Creating upgrade pod on %s...\n", node.Name)
+				pod := createUpgradePod(ctx, kubeclient, node.Name, mcp.Spec.Version)
+				if err != nil {
+					logger.Error(err, "Error creating upgrade pod.")
+				}
+
+				fmt.Printf("Waiting for upgrade node to be updated to the given version...\n")
+				err = waitForNodeUpgrade(ctx, kubeclient, node.Name, mcp.Spec.Version)
+				if err != nil {
+					logger.Error(err, "Error waiting for node upgrade.")
+				}
+
+				// Get the machine name
+				currentMachine := &clusterv1.Machine{}
+				currentMachineName := node.Annotations["cluster.x-k8s.io/machine"]
+				err = r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: currentMachineName}, currentMachine)
+				if err != nil {
+					logger.Error(err, "Error getting machine.")
+				}
+
+				// Update the machine version
+				currentMachine.Spec.Version = &mcp.Spec.Version
+				err = r.Client.Update(ctx, currentMachine)
+				if err != nil {
+					logger.Error(err, "Error updating machine version.")
+				}
+
+				time.Sleep(10 * time.Second)
+
+				// wait until pod is deleted
+				fmt.Printf("Removing upgrade pod %s from %s...\n", pod.ObjectMeta.Name, node.Name)
+				err = waitForPodDeletion(ctx, kubeclient, pod.ObjectMeta.Name)
+				if err != nil {
+					logger.Error(err, "Error waiting for pod deletion.")
+				}
+
+				fmt.Printf("Upgrade of %s completed.\n", node.Name)
+			}
 		}
+
 	}
 
 	switch {
@@ -514,4 +573,85 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 
 	// Requeue so that we handle any additional scaling.
 	return ctrl.Result{Requeue: true}, nil
+}
+
+func createUpgradePod(ctx context.Context, kubeclient *kubernetesClient, nodeName string, nodeVersion string) *corev1.Pod {
+	nodeVersion = strings.TrimPrefix(semver.MajorMinor(nodeVersion), "v")
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "mypod",
+		},
+		Spec: corev1.PodSpec{
+			NodeName: nodeName,
+			Containers: []corev1.Container{
+				{
+					Name:  "upgrade",
+					Image: "sachinsinghcanonical/my-image:latest",
+					Command: []string{
+						"/bin/bash",
+						"-c",
+					},
+					Args: []string{
+						fmt.Sprintf("curl -X POST -H \"Content-Type: application/json\" --unix-socket /run/snapd.socket -d '{\"action\": \"refresh\",\"channel\":\"%s/stable\"}' http://localhost/v2/snaps/microk8s", nodeVersion),
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{
+							Name:      "snapd-socket",
+							MountPath: "/run/snapd.socket",
+						},
+					},
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: "snapd-socket",
+					VolumeSource: corev1.VolumeSource{
+						HostPath: &corev1.HostPathVolumeSource{
+							Path: "/run/snapd.socket",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	pod, err := kubeclient.CoreV1().Pods("default").Create(ctx, pod, metav1.CreateOptions{})
+	if err != nil {
+		fmt.Printf("Error creating upgrade pod: %v", err)
+	}
+
+	return pod
+}
+
+func waitForNodeUpgrade(ctx context.Context, kubeclient *kubernetesClient, nodeName, nodeVersion string) error {
+	for {
+		node, err := kubeclient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		currentVersion := semver.MajorMinor(node.Status.NodeInfo.KubeletVersion)
+		nodeVersion = semver.MajorMinor(nodeVersion)
+		fmt.Println(currentVersion, nodeVersion)
+		if strings.HasPrefix(currentVersion, nodeVersion) {
+			break
+		}
+		time.Sleep(10 * time.Second)
+	}
+	return nil
+}
+
+func waitForPodDeletion(ctx context.Context, kubeclient *kubernetesClient, podName string) error {
+	for {
+		err := kubeclient.CoreV1().Pods("default").Delete(ctx, podName, metav1.DeleteOptions{})
+		time.Sleep(5 * time.Second)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				break
+			}
+			return err
+		} else {
+			break
+		}
+	}
+	return nil
 }

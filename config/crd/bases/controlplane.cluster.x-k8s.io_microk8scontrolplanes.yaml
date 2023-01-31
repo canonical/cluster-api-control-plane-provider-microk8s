@@ -64,8 +64,8 @@ spec:
             description: MicroK8sControlPlaneSpec defines the desired state of MicroK8sControlPlane
             properties:
               controlPlaneConfig:
-                description: to use for initializing and joining machines to the control
-                  plane.
+                description: ControlPlaneConfig is the reference configs to be used
+                  for initializing and joining machines to the control plane.
                 properties:
                   clusterConfiguration:
                     description: InitConfiguration along with ClusterConfiguration
@@ -181,9 +181,8 @@ spec:
                     type: object
                 type: object
               machineTemplate:
-                description: 'EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-                  NOTE: json tags are required.  Any new fields you add must have
-                  json tags for the fields to be serialized.'
+                description: MachineTemplate is the machine template to be used for
+                  creating control plane machines.
                 properties:
                   infrastructureTemplate:
                     description: InfrastructureTemplate is a required reference to
@@ -227,8 +226,17 @@ spec:
                 - infrastructureTemplate
                 type: object
               replicas:
+                description: Replicas is the desired number of control-plane machine
+                  replicas.
                 format: int32
                 type: integer
+              upgradeStrategy:
+                description: 'UpgradeStrategy describes how to replace existing machines
+                  with new ones. Values can be: InPlaceUpgrade or RollingUpgrade.'
+                enum:
+                - InPlaceUpgrade
+                - RollingUpgrade
+                type: string
               version:
                 description: Version defines the desired Kubernetes version.
                 minLength: 2

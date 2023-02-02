@@ -180,13 +180,15 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 
 			defer kubeclient.Close() //nolint:errcheck
 
-			// Get a list of nodes
-			nodes, err := kubeclient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-			if err != nil {
-				return ctrl.Result{RequeueAfter: 20 * time.Second}, err
-			}
+			// For each machine, get the node and upgrade it
+			for _, machine := range machines {
 
-			for _, node := range nodes.Items {
+				// Get the node for the machine
+				node, err := kubeclient.CoreV1().Nodes().Get(ctx, machine.Status.NodeRef.Name, metav1.GetOptions{})
+				if err != nil {
+					return ctrl.Result{RequeueAfter: 20 * time.Second}, err
+				}
+
 				fmt.Printf("Upgrading %s...\n", node.Name)
 
 				fmt.Printf("Creating upgrade pod on %s...\n", node.Name)
@@ -201,22 +203,17 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 					logger.Error(err, "Error waiting for node upgrade.")
 				}
 
-				// Get the machine name
-				currentMachine := &clusterv1.Machine{}
-				currentMachineName := node.Annotations["cluster.x-k8s.io/machine"]
-				err = r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: currentMachineName}, currentMachine)
-				if err != nil {
-					logger.Error(err, "Error getting machine.")
-				}
+				time.Sleep(5 * time.Second)
 
 				// Update the machine version
-				currentMachine.Spec.Version = &mcp.Spec.Version
-				err = r.Client.Update(ctx, currentMachine)
+				machine.Spec.Version = &mcp.Spec.Version
+				fmt.Printf("Updating machine %s version to %s...\n", machine.Name, *machine.Spec.Version)
+				err = r.Client.Update(ctx, &machine)
 				if err != nil {
 					logger.Error(err, "Error updating machine version.")
 				}
 
-				time.Sleep(10 * time.Second)
+				time.Sleep(5 * time.Second)
 
 				// wait until pod is deleted
 				fmt.Printf("Removing upgrade pod %s from %s...\n", pod.ObjectMeta.Name, node.Name)
@@ -225,7 +222,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 					logger.Error(err, "Error waiting for pod deletion.")
 				}
 
-				fmt.Printf("Upgrade of %s completed.\n", node.Name)
+				fmt.Printf("Upgrade of node %s completed.\n", node.Name)
 			}
 		}
 
@@ -577,9 +574,10 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 
 func createUpgradePod(ctx context.Context, kubeclient *kubernetesClient, nodeName string, nodeVersion string) *corev1.Pod {
 	nodeVersion = strings.TrimPrefix(semver.MajorMinor(nodeVersion), "v")
+	// TODO: Will this image work?
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "mypod",
+			Name: "upgrade-pod",
 		},
 		Spec: corev1.PodSpec{
 			NodeName: nodeName,
@@ -631,7 +629,6 @@ func waitForNodeUpgrade(ctx context.Context, kubeclient *kubernetesClient, nodeN
 		}
 		currentVersion := semver.MajorMinor(node.Status.NodeInfo.KubeletVersion)
 		nodeVersion = semver.MajorMinor(nodeVersion)
-		fmt.Println(currentVersion, nodeVersion)
 		if strings.HasPrefix(currentVersion, nodeVersion) {
 			break
 		}
@@ -642,8 +639,12 @@ func waitForNodeUpgrade(ctx context.Context, kubeclient *kubernetesClient, nodeN
 
 func waitForPodDeletion(ctx context.Context, kubeclient *kubernetesClient, podName string) error {
 	for {
-		err := kubeclient.CoreV1().Pods("default").Delete(ctx, podName, metav1.DeleteOptions{})
-		time.Sleep(5 * time.Second)
+		gracePeriod := int64(0)
+		deleteOptions := metav1.DeleteOptions{
+			GracePeriodSeconds: &gracePeriod,
+		}
+		err := kubeclient.CoreV1().Pods("default").Delete(ctx, podName, deleteOptions)
+		time.Sleep(10 * time.Second)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				break

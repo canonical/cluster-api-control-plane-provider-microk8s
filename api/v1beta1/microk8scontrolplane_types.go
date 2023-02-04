@@ -27,6 +27,11 @@ import (
 type UpgradeStrategyType string
 
 const (
+	// SmartUpgradeStrategyType is an upgrade strategy that
+	// performs an in-place upgrade of the control plane on non-HA clusters and
+	// a rolling upgrade on HA clusters.
+	SmartUpgradeStrategyType UpgradeStrategyType = "SmartUpgrade"
+
 	// InPlaceUpgradeStrategyType is an upgrade strategy that
 	// performs an in-place upgrade of the control plane.
 	InPlaceUpgradeStrategyType UpgradeStrategyType = "InPlaceUpgrade"
@@ -66,9 +71,9 @@ type MicroK8sControlPlaneSpec struct {
 
 	// UpgradeStrategy describes how to replace existing machines
 	// with new ones.
-	// Values can be: InPlaceUpgrade or RollingUpgrade.
+	// Values can be: InPlaceUpgrade, RollingUpgrade or SmartUpgrade.
 	// +optional
-	// +kubebuilder:validation:Enum=InPlaceUpgrade;RollingUpgrade
+	// +kubebuilder:validation:Enum=InPlaceUpgrade;RollingUpgrade;SmartUpgrade
 	UpgradeStrategy UpgradeStrategyType `json:"upgradeStrategy"`
 
 	// ControlPlaneConfig is the reference configs to be used for initializing and joining

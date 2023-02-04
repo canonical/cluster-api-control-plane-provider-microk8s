@@ -135,8 +135,15 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 		newVersion = semver.MajorMinor(mcp.Spec.Version)
 	}
 
+	upgradeStrategySelected := mcp.Spec.UpgradeStrategy
+	if upgradeStrategySelected == "" {
+		upgradeStrategySelected = clusterv1beta1.SmartUpgradeStrategyType
+	}
+
 	if oldVersion != "" && semver.Compare(oldVersion, newVersion) != 0 {
-		if mcp.Spec.UpgradeStrategy == clusterv1beta1.RollingUpgradeStrategyType {
+		if upgradeStrategySelected == clusterv1beta1.RollingUpgradeStrategyType ||
+			(upgradeStrategySelected == clusterv1beta1.SmartUpgradeStrategyType &&
+				numMachines >= 3) {
 
 			// Assumption: The newer machines are appended at the end of the
 			// machines list, due to list being sorted by creation timestamp.
@@ -170,7 +177,9 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 
 				return r.bootControlPlane(ctx, cluster, mcp, controlPlane, false)
 			}
-		} else if mcp.Spec.UpgradeStrategy == clusterv1beta1.InPlaceUpgradeStrategyType {
+		} else if upgradeStrategySelected == clusterv1beta1.InPlaceUpgradeStrategyType ||
+			(upgradeStrategySelected == clusterv1beta1.SmartUpgradeStrategyType &&
+				numMachines < 3) {
 
 			// Make a client that interacts with the workload cluster.
 			kubeclient, err := r.kubeconfigForCluster(ctx, util.ObjectKey(cluster))
@@ -189,15 +198,13 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 					return ctrl.Result{RequeueAfter: 20 * time.Second}, err
 				}
 
-				fmt.Printf("Upgrading %s...\n", node.Name)
-
-				fmt.Printf("Creating upgrade pod on %s...\n", node.Name)
-				pod := createUpgradePod(ctx, kubeclient, node.Name, mcp.Spec.Version)
+				logger.Info(fmt.Sprintf("Creating upgrade pod on %s...", node.Name))
+				pod, err := createUpgradePod(ctx, kubeclient, node.Name, mcp.Spec.Version)
 				if err != nil {
 					logger.Error(err, "Error creating upgrade pod.")
 				}
 
-				fmt.Printf("Waiting for upgrade node to be updated to the given version...\n")
+				logger.Info(fmt.Sprintf("Waiting for upgrade node to be updated to the given version..."))
 				err = waitForNodeUpgrade(ctx, kubeclient, node.Name, mcp.Spec.Version)
 				if err != nil {
 					logger.Error(err, "Error waiting for node upgrade.")
@@ -207,7 +214,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 
 				// Update the machine version
 				machine.Spec.Version = &mcp.Spec.Version
-				fmt.Printf("Updating machine %s version to %s...\n", machine.Name, *machine.Spec.Version)
+				logger.Info(fmt.Sprintf("Updating machine %s version to %s...", machine.Name, *machine.Spec.Version))
 				err = r.Client.Update(ctx, &machine)
 				if err != nil {
 					logger.Error(err, "Error updating machine version.")
@@ -216,7 +223,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 				time.Sleep(5 * time.Second)
 
 				// wait until pod is deleted
-				fmt.Printf("Removing upgrade pod %s from %s...\n", pod.ObjectMeta.Name, node.Name)
+				logger.Info(fmt.Sprintf("Removing upgrade pod %s from %s...", pod.ObjectMeta.Name, node.Name))
 				err = waitForPodDeletion(ctx, kubeclient, pod.ObjectMeta.Name)
 				if err != nil {
 					logger.Error(err, "Error waiting for pod deletion.")
@@ -572,9 +579,12 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 	return ctrl.Result{Requeue: true}, nil
 }
 
-func createUpgradePod(ctx context.Context, kubeclient *kubernetesClient, nodeName string, nodeVersion string) *corev1.Pod {
+func createUpgradePod(ctx context.Context, kubeclient *kubernetesClient, nodeName string, nodeVersion string) (*corev1.Pod, error) {
 	nodeVersion = strings.TrimPrefix(semver.MajorMinor(nodeVersion), "v")
-	// TODO: Will this image work?
+
+	uid := int64(0)
+	priv := true
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "upgrade-pod",
@@ -584,11 +594,12 @@ func createUpgradePod(ctx context.Context, kubeclient *kubernetesClient, nodeNam
 			Containers: []corev1.Container{
 				{
 					Name:  "upgrade",
-					Image: "sachinsinghcanonical/my-image:latest",
+					Image: "curlimages/curl:7.87.0",
 					Command: []string{
-						"/bin/bash",
+						"su",
 						"-c",
 					},
+					SecurityContext: &corev1.SecurityContext{Privileged: &priv, RunAsUser: &uid},
 					Args: []string{
 						fmt.Sprintf("curl -X POST -H \"Content-Type: application/json\" --unix-socket /run/snapd.socket -d '{\"action\": \"refresh\",\"channel\":\"%s/stable\"}' http://localhost/v2/snaps/microk8s", nodeVersion),
 					},
@@ -615,10 +626,10 @@ func createUpgradePod(ctx context.Context, kubeclient *kubernetesClient, nodeNam
 
 	pod, err := kubeclient.CoreV1().Pods("default").Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
-		fmt.Printf("Error creating upgrade pod: %v", err)
+		return nil, err
 	}
 
-	return pod
+	return pod, nil
 }
 
 func waitForNodeUpgrade(ctx context.Context, kubeclient *kubernetesClient, nodeName, nodeVersion string) error {

@@ -214,10 +214,10 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 
 				// Update the machine version
 				machine.Spec.Version = &mcp.Spec.Version
-				logger.Info(fmt.Sprintf("Updating machine %s version to %s...", machine.Name, *machine.Spec.Version))
+				logger.Info(fmt.Sprintf("Not updating machine %s version to %s...", machine.Name, *machine.Spec.Version))
 				err = r.Client.Update(ctx, &machine)
 				if err != nil {
-					logger.Error(err, "Error updating machine version.")
+					logger.Info("Could not update the machine version. We will retry.")
 				}
 
 				time.Sleep(5 * time.Second)
@@ -285,7 +285,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 			if err := r.bootstrapCluster(ctx, mcp, cluster, machines); err != nil {
 				conditions.MarkFalse(mcp, clusterv1beta1.MachinesBootstrapped, clusterv1beta1.WaitingForMicroK8sBootReason, clusterv1.ConditionSeverityInfo, err.Error())
 
-				logger.Error(err, "bootstrap failed, retrying in 20 seconds")
+				logger.Info("bootstrap failed, retrying in 20 seconds")
 
 				return ctrl.Result{RequeueAfter: time.Second * 20}, nil
 			}
@@ -633,7 +633,9 @@ func createUpgradePod(ctx context.Context, kubeclient *kubernetesClient, nodeNam
 }
 
 func waitForNodeUpgrade(ctx context.Context, kubeclient *kubernetesClient, nodeName, nodeVersion string) error {
-	for {
+	// attempt to connect 60 times. With a wait of 10 secs this should be 600 sec = 10 min
+	attempts := 60
+	for attempts > 0 {
 		node, err := kubeclient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 		if err != nil {
 			return err
@@ -644,6 +646,7 @@ func waitForNodeUpgrade(ctx context.Context, kubeclient *kubernetesClient, nodeN
 			break
 		}
 		time.Sleep(10 * time.Second)
+		attempts--
 	}
 	return nil
 }

@@ -204,23 +204,31 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 					logger.Error(err, "Error creating upgrade pod.")
 				}
 
-				logger.Info(fmt.Sprintf("Waiting for upgrade node to be updated to the given version..."))
+				logger.Info("Waiting for upgrade node to be updated to the given version...")
 				err = waitForNodeUpgrade(ctx, kubeclient, node.Name, mcp.Spec.Version)
 				if err != nil {
 					logger.Error(err, "Error waiting for node upgrade.")
 				}
 
-				time.Sleep(5 * time.Second)
+				time.Sleep(10 * time.Second)
 
-				// Update the machine version
-				machine.Spec.Version = &mcp.Spec.Version
-				logger.Info(fmt.Sprintf("Not updating machine %s version to %s...", machine.Name, *machine.Spec.Version))
-				err = r.Client.Update(ctx, &machine)
+				// Get the current machine
+				currentMachine := &clusterv1.Machine{}
+				currentMachineName := node.Annotations["cluster.x-k8s.io/machine"]
+				err = r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: currentMachineName}, currentMachine)
 				if err != nil {
-					logger.Info("Could not update the machine version. We will retry.")
+					logger.Error(err, "Error getting machine.")
 				}
 
-				time.Sleep(5 * time.Second)
+				// Update the machine version
+				currentMachine.Spec.Version = &mcp.Spec.Version
+				logger.Info(fmt.Sprintf("Now updating machine %s version to %s...", currentMachine.Name, *currentMachine.Spec.Version))
+				err = r.Client.Update(ctx, currentMachine)
+				if err != nil {
+					logger.Error(err, "Could not update the machine version. We will retry.")
+				}
+
+				time.Sleep(10 * time.Second)
 
 				// wait until pod is deleted
 				logger.Info(fmt.Sprintf("Removing upgrade pod %s from %s...", pod.ObjectMeta.Name, node.Name))
@@ -229,7 +237,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 					logger.Error(err, "Error waiting for pod deletion.")
 				}
 
-				fmt.Printf("Upgrade of node %s completed.\n", node.Name)
+				logger.Info(fmt.Sprintf("Upgrade of node %s completed.\n", node.Name))
 			}
 		}
 

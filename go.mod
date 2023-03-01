@@ -3,7 +3,7 @@ module github.com/canonical/cluster-api-control-plane-provider-microk8s
 go 1.19
 
 require (
-	github.com/canonical/cluster-api-bootstrap-provider-microk8s v0.3.0-api.0
+	github.com/canonical/cluster-api-bootstrap-provider-microk8s v0.5.0-api.0
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/gomega v1.22.1
 	k8s.io/api v0.25.3
@@ -27,6 +27,7 @@ require (
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	k8s.io/cluster-bootstrap v0.25.3 // indirect
 )
 
 require (

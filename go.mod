@@ -27,7 +27,6 @@ require (
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	k8s.io/cluster-bootstrap v0.25.3 // indirect
 )
 
 require (

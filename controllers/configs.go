@@ -105,6 +105,9 @@ func (r *MicroK8sControlPlaneReconciler) kubeconfigForCluster(ctx context.Contex
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: cluster.Namespace,
 				Name:      cluster.Name + "-kubeconfig",
+				Labels: map[string]string{
+					clusterv1.ClusterLabelName: cluster.Name,
+				},
 			},
 			Data: map[string][]byte{
 				"value": []byte(*kubeconfig),

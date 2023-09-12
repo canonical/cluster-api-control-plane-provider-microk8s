@@ -351,6 +351,10 @@ func (r *MicroK8sControlPlaneReconciler) bootControlPlane(ctx context.Context, c
 		Namespace:   mcp.Namespace,
 		OwnerRef:    infraCloneOwner,
 		ClusterName: cluster.Name,
+		Labels: map[string]string{
+			clusterv1.ClusterLabelName:             cluster.Name,
+			clusterv1.MachineControlPlaneLabelName: "",
+		},
 	})
 	if err != nil {
 		conditions.MarkFalse(mcp, clusterv1beta1.MachinesCreatedCondition,

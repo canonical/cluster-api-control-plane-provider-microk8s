@@ -154,7 +154,7 @@ func (r *MicroK8sControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl
 
 		// Requeue the MicroK8sControlPlane after every 30 seconds.
 		// This takes care of the default case where we need to requeue and get the status even when the node isn't yet ready.
-		res = ctrl.Result{RequeueAfter: 30 * time.Second}
+		// res = ctrl.Result{RequeueAfter: 30 * time.Second}
 		logger.Info("successfully updated control plane status")
 	}()
 

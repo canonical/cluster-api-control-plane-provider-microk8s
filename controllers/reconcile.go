@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net"
 	"sort"
 	"strings"
 	"time"
 
 	clusterv1beta1 "github.com/canonical/cluster-api-control-plane-provider-microk8s/api/v1beta1"
+	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/clusteragent"
 	"golang.org/x/mod/semver"
 
 	"github.com/pkg/errors"
@@ -16,6 +18,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/storage/names"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/controllers/external"
@@ -575,6 +578,16 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, fmt.Errorf("%q machine does not have a nodeRef", deleteMachine.Name)
 	}
 
+	// get cluster agent client and delete node from dqlite
+	clusterAgentClient, err := getClusterAgentClient(machines, deleteMachine)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to get cluster agent client: %w", err)
+	}
+
+	if err := r.removeNodeFromDqlite(ctx, clusterAgentClient, deleteMachine); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to remove node %q from dqlite: %w", deleteMachine.Name, err)
+	}
+
 	node := deleteMachine.Status.NodeRef
 
 	logger = logger.WithValues("machineName", deleteMachine.Name, "nodeName", node.Name)
@@ -593,6 +606,50 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 
 	// Requeue so that we handle any additional scaling.
 	return ctrl.Result{Requeue: true}, nil
+}
+
+func getClusterAgentClient(machines []clusterv1.Machine, delMachine clusterv1.Machine) (*clusteragent.Client, error) {
+	opts := clusteragent.Options{
+		IgnoreNodeIPs: sets.NewString(),
+		// NOTE(hue): Port is hard coded according to
+		// https://github.com/canonical/cluster-api-control-plane-provider-microk8s/blob/v0.6.10/control-plane-components.yaml#L96-L102
+		Port: "30000",
+	}
+	// NOTE(hue): We want to pick a random machine's IP to call POST /dqlite/remove on its cluster agent endpoint.
+	// This machine should preferably not be the <delMachine> itself but this is not forced by Microk8s.
+	for _, addr := range delMachine.Status.Addresses {
+		opts.IgnoreNodeIPs.Insert(addr.Address)
+	}
+
+	clusterAgentClient, err := clusteragent.NewClient(machines, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize cluster agent client: %w", err)
+	}
+
+	return clusterAgentClient, nil
+}
+
+// removeMicrok8sNode removes the node from
+func (r *MicroK8sControlPlaneReconciler) removeNodeFromDqlite(ctx context.Context, clusterAgentClient *clusteragent.Client, delMachine clusterv1.Machine) error {
+	var removeEp string
+	for _, addr := range delMachine.Status.Addresses {
+		if ip := net.ParseIP(addr.Address); ip != nil {
+			// NOTE(hue): Port is hard coded according to
+			// https://github.com/canonical/cluster-api-control-plane-provider-microk8s/blob/v0.6.10/control-plane-components.yaml#L96-L102
+			removeEp = fmt.Sprintf("%s:2379", addr.Address)
+			break
+		}
+	}
+
+	if removeEp == "" {
+		return fmt.Errorf("failed to extract endpoint of the deleting machine %q", delMachine.Name)
+	}
+
+	if err := clusterAgentClient.RemoveNodeFromDqlite(ctx, removeEp); err != nil {
+		return fmt.Errorf("failed to remove node %q from dqlite: %w", removeEp, err)
+	}
+
+	return nil
 }
 
 func createUpgradePod(ctx context.Context, kubeclient *kubernetesClient, nodeName string, nodeVersion string) (*corev1.Pod, error) {

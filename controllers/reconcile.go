@@ -578,19 +578,24 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, fmt.Errorf("%q machine does not have a nodeRef", deleteMachine.Name)
 	}
 
-	// get cluster agent client and delete node from dqlite
-	clusterAgentClient, err := getClusterAgentClient(machines, deleteMachine)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to get cluster agent client: %w", err)
-	}
-
-	if err := r.removeNodeFromDqlite(ctx, clusterAgentClient, deleteMachine); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to remove node %q from dqlite: %w", deleteMachine.Name, err)
-	}
-
 	node := deleteMachine.Status.NodeRef
 
 	logger = logger.WithValues("machineName", deleteMachine.Name, "nodeName", node.Name)
+
+	logger.Info("deleting node from dqlite", "machineName", deleteMachine.Name, "nodeName", node.Name)
+
+	// NOTE(Hue): We do this step as a best effort since this whole logic is implemented to prevent a not-yet-reported bug.
+	// If we have more than 2 machines left, get cluster agent client and delete node from dqlite
+	if len(machines) > 1 {
+		if clusterAgentClient, err := getClusterAgentClient(machines, deleteMachine); err == nil {
+			if err := r.removeNodeFromDqlite(ctx, clusterAgentClient, deleteMachine); err != nil {
+				logger.Error(err, "failed to remove node from dqlite: %w", "machineName", deleteMachine.Name, "nodeName", node.Name)
+			}
+		} else {
+			logger.Error(err, "failed to get cluster agent client")
+		}
+	}
+
 	logger.Info("deleting machine")
 
 	err = r.Client.Delete(ctx, &deleteMachine)

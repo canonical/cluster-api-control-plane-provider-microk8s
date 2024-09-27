@@ -14,7 +14,10 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 )
 
-const defaultClusterAgentPort = "25000"
+const (
+	defaultClusterAgentPort = "25000"
+	defaultTimeout          = 10 * time.Second
+)
 
 // Options should be used when initializing a new client.
 type Options struct {
@@ -24,6 +27,8 @@ type Options struct {
 	Port string
 	// InsecureSkipVerify skips the verification of the server's certificate chain and host name.
 	InsecureSkipVerify bool
+	// Timeout is the maximum amount of time a request is allowed to take.
+	Timeout time.Duration
 }
 
 type Client struct {
@@ -53,6 +58,11 @@ func NewClient(machines []clusterv1.Machine, opts Options) (*Client, error) {
 		port = opts.Port
 	}
 
+	timeout := defaultTimeout
+	if opts.Timeout != 0 {
+		timeout = opts.Timeout
+	}
+
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: opts.InsecureSkipVerify,
@@ -63,7 +73,7 @@ func NewClient(machines []clusterv1.Machine, opts Options) (*Client, error) {
 		ip:   ip,
 		port: port,
 		client: &http.Client{
-			Timeout:   30 * time.Second,
+			Timeout:   timeout,
 			Transport: transport,
 		},
 	}, nil

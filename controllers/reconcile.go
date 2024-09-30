@@ -31,6 +31,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
+const (
+	defaultClusterAgentPort          string        = "25000"
+	defaultDqlitePort                string        = "19001"
+	defaultClusterAgentClientTimeout time.Duration = 10 * time.Second
+)
+
 type errServiceUnhealthy struct {
 	service string
 	reason  string
@@ -585,7 +591,10 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 	logger.Info("deleting node from dqlite", "machineName", deleteMachine.Name, "nodeName", node.Name)
 
 	// NOTE(Hue): We do this step as a best effort since this whole logic is implemented to prevent a not-yet-reported bug.
-	// If we have more than 2 machines left, get cluster agent client and delete node from dqlite
+	// The issue is that we were not removing the endpoint from dqlite when we were deleting a machine.
+	// This would cause a situation were a joining node failed to join because the endpoint was already in the dqlite cluster.
+	// How? The IP assigned to the joining (new) node, previously belonged to a node that was deleted, but the IP is still there in dqlite.
+	// If we have 2 or more machines left, get cluster agent client and delete node from dqlite
 	if len(machines) > 1 {
 		portRemap := tcp != nil && tcp.Spec.ControlPlaneConfig.ClusterConfiguration != nil && tcp.Spec.ControlPlaneConfig.ClusterConfiguration.PortCompatibilityRemap
 
@@ -616,23 +625,19 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 }
 
 func getClusterAgentClient(machines []clusterv1.Machine, delMachine clusterv1.Machine, portRemap bool) (*clusteragent.Client, error) {
-	port := "25000"
+	opts := clusteragent.Options{
+		// NOTE(hue): We want to pick a random machine's IP to call POST /dqlite/remove on its cluster agent endpoint.
+		// This machine should preferably not be the <delMachine> itself, although this is not forced by Microk8s.
+		IgnoreMachineNames: sets.NewString(delMachine.Name),
+	}
+
+	port := defaultClusterAgentPort
 	if portRemap {
 		// https://github.com/canonical/cluster-api-control-plane-provider-microk8s/blob/v0.6.10/control-plane-components.yaml#L96-L102
 		port = "30000"
 	}
 
-	opts := clusteragent.Options{
-		IgnoreNodeIPs: sets.NewString(),
-		Port:          port,
-	}
-	// NOTE(hue): We want to pick a random machine's IP to call POST /dqlite/remove on its cluster agent endpoint.
-	// This machine should preferably not be the <delMachine> itself but this is not forced by Microk8s.
-	for _, addr := range delMachine.Status.Addresses {
-		opts.IgnoreNodeIPs.Insert(addr.Address)
-	}
-
-	clusterAgentClient, err := clusteragent.NewClient(machines, opts)
+	clusterAgentClient, err := clusteragent.NewClient(machines, port, defaultClusterAgentClientTimeout, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize cluster agent client: %w", err)
 	}
@@ -642,7 +647,7 @@ func getClusterAgentClient(machines []clusterv1.Machine, delMachine clusterv1.Ma
 
 // removeMicrok8sNode removes the node from
 func (r *MicroK8sControlPlaneReconciler) removeNodeFromDqlite(ctx context.Context, clusterAgentClient *clusteragent.Client, delMachine clusterv1.Machine, portRemap bool) error {
-	dqlitePort := "19001"
+	dqlitePort := defaultDqlitePort
 	if portRemap {
 		// https://github.com/canonical/cluster-api-control-plane-provider-microk8s/blob/v0.6.10/control-plane-components.yaml#L96-L102
 		dqlitePort = "2379"
@@ -650,7 +655,7 @@ func (r *MicroK8sControlPlaneReconciler) removeNodeFromDqlite(ctx context.Contex
 
 	var removeEp string
 	for _, addr := range delMachine.Status.Addresses {
-		if ip := net.ParseIP(addr.Address); ip != nil {
+		if net.ParseIP(addr.Address) != nil {
 			removeEp = fmt.Sprintf("%s:%s", addr.Address, dqlitePort)
 			break
 		}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	. "github.com/onsi/gomega"
 
@@ -33,7 +34,7 @@ func TestRemoveFromDqlite(t *testing.T) {
 				},
 			},
 		},
-	}, clusteragent.Options{Port: port, InsecureSkipVerify: true})
+	}, port, time.Second, clusteragent.Options{InsecureSkipVerify: true})
 
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(c.RemoveNodeFromDqlite(context.Background(), "1.1.1.1:1234")).To(Succeed())

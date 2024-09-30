@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -14,21 +15,13 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 )
 
-const (
-	defaultClusterAgentPort = "25000"
-	defaultTimeout          = 10 * time.Second
-)
-
 // Options should be used when initializing a new client.
 type Options struct {
-	// IgnoreNodeIPs is a set of ignored IPs that we don't want to pick for the cluster agent endpoint.
-	IgnoreNodeIPs sets.String
-	// Port overwrites the default cluster agent port to connect.
-	Port string
+	// IgnoreMachineNames is a set of ignored machine names that we don't want to pick their IP for the cluster agent endpoint.
+	IgnoreMachineNames sets.String
 	// InsecureSkipVerify skips the verification of the server's certificate chain and host name.
+	// This is mostly used for testing purposes.
 	InsecureSkipVerify bool
-	// Timeout is the maximum amount of time a request is allowed to take.
-	Timeout time.Duration
 }
 
 type Client struct {
@@ -38,29 +31,24 @@ type Client struct {
 
 // NewClient picks an IP from one of the given machines and creates a new client for the cluster agent
 // with that IP.
-func NewClient(machines []clusterv1.Machine, opts Options) (*Client, error) {
+func NewClient(machines []clusterv1.Machine, port string, timeout time.Duration, opts Options) (*Client, error) {
 	var ip string
 	for _, m := range machines {
+		if opts.IgnoreMachineNames.Has(m.Name) {
+			continue
+		}
+
 		for _, addr := range m.Status.Addresses {
-			if !opts.IgnoreNodeIPs.Has(addr.Address) {
+			if net.ParseIP(addr.Address) != nil {
 				ip = addr.Address
 				break
 			}
 		}
+		break
 	}
 
 	if ip == "" {
 		return nil, errors.New("failed to find an IP for cluster agent")
-	}
-
-	port := defaultClusterAgentPort
-	if opts.Port != "" {
-		port = opts.Port
-	}
-
-	timeout := defaultTimeout
-	if opts.Timeout != 0 {
-		timeout = opts.Timeout
 	}
 
 	transport := &http.Transport{

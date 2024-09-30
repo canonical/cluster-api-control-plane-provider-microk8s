@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	. "github.com/onsi/gomega"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/clusteragent"
@@ -23,24 +26,27 @@ func TestClient(t *testing.T) {
 
 		// Machines don't have any addresses.
 		machines := []clusterv1.Machine{{}, {}}
-		_, err := clusteragent.NewClient(machines, clusteragent.Options{})
+		_, err := clusteragent.NewClient(machines, "25000", time.Second, clusteragent.Options{})
 
 		g.Expect(err).To(HaveOccurred())
 
 		// The only machine is the ignored one.
-		addr := "1.1.1.1"
+		ignoreName := "ignore"
 		machines = []clusterv1.Machine{
 			{
+				ObjectMeta: v1.ObjectMeta{
+					Name: ignoreName,
+				},
 				Status: clusterv1.MachineStatus{
 					Addresses: clusterv1.MachineAddresses{
 						{
-							Address: addr,
+							Address: "1.1.1.1",
 						},
 					},
 				},
 			},
 		}
-		_, err = clusteragent.NewClient(machines, clusteragent.Options{IgnoreNodeIPs: sets.NewString(addr)})
+		_, err = clusteragent.NewClient(machines, "25000", time.Second, clusteragent.Options{IgnoreMachineNames: sets.NewString(ignoreName)})
 
 		g.Expect(err).To(HaveOccurred())
 	})
@@ -52,6 +58,8 @@ func TestClient(t *testing.T) {
 		firstAddr := "1.1.1.1"
 		secondAddr := "2.2.2.2"
 		thirdAddr := "3.3.3.3"
+
+		ignoreName := "ignore"
 		ignoreAddr := "8.8.8.8"
 		machines := []clusterv1.Machine{
 			{
@@ -81,16 +89,28 @@ func TestClient(t *testing.T) {
 					},
 				},
 			},
+			{
+				ObjectMeta: v1.ObjectMeta{
+					Name: ignoreName,
+				},
+				Status: clusterv1.MachineStatus{
+					Addresses: clusterv1.MachineAddresses{
+						{
+							Address: ignoreAddr,
+						},
+					},
+				},
+			},
 		}
 
 		opts := clusteragent.Options{
-			IgnoreNodeIPs: sets.NewString(ignoreAddr),
-			Port:          port,
+			IgnoreMachineNames: sets.NewString(ignoreName),
 		}
 
-		// NOTE(Hue): Repeat the test to make sure the IP is not picked by chance (reduce flakiness).
-		for i := 0; i < 30; i++ {
-			c, err := clusteragent.NewClient(machines, opts)
+		// NOTE(Hue): Repeat the test to make sure the ignored machine's IP is not picked by chance (reduce flakiness).
+		for i := 0; i < 100; i++ {
+			machines = shuffleMachines(machines)
+			c, err := clusteragent.NewClient(machines, port, time.Second, opts)
 
 			g.Expect(err).ToNot(HaveOccurred())
 
@@ -125,7 +145,7 @@ func TestDo(t *testing.T) {
 				},
 			},
 		},
-	}, clusteragent.Options{Port: port, InsecureSkipVerify: true})
+	}, port, time.Second, clusteragent.Options{InsecureSkipVerify: true})
 
 	g.Expect(err).ToNot(HaveOccurred())
 
@@ -181,4 +201,13 @@ func NewServerMock(method string, path string, response any) *serverMock {
 		request:  req,
 		ts:       ts,
 	}
+}
+
+func shuffleMachines(src []clusterv1.Machine) []clusterv1.Machine {
+	dest := make([]clusterv1.Machine, len(src))
+	perm := rand.Perm(len(src))
+	for i, v := range perm {
+		dest[v] = src[i]
+	}
+	return dest
 }

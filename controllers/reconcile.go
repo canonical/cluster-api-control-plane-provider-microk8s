@@ -587,8 +587,10 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 	// NOTE(Hue): We do this step as a best effort since this whole logic is implemented to prevent a not-yet-reported bug.
 	// If we have more than 2 machines left, get cluster agent client and delete node from dqlite
 	if len(machines) > 1 {
-		if clusterAgentClient, err := getClusterAgentClient(machines, deleteMachine); err == nil {
-			if err := r.removeNodeFromDqlite(ctx, clusterAgentClient, deleteMachine); err != nil {
+		portRemap := tcp != nil && tcp.Spec.ControlPlaneConfig.ClusterConfiguration != nil && tcp.Spec.ControlPlaneConfig.ClusterConfiguration.PortCompatibilityRemap
+
+		if clusterAgentClient, err := getClusterAgentClient(machines, deleteMachine, portRemap); err == nil {
+			if err := r.removeNodeFromDqlite(ctx, clusterAgentClient, deleteMachine, portRemap); err != nil {
 				logger.Error(err, "failed to remove node from dqlite: %w", "machineName", deleteMachine.Name, "nodeName", node.Name)
 			}
 		} else {
@@ -613,12 +615,16 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 	return ctrl.Result{Requeue: true}, nil
 }
 
-func getClusterAgentClient(machines []clusterv1.Machine, delMachine clusterv1.Machine) (*clusteragent.Client, error) {
+func getClusterAgentClient(machines []clusterv1.Machine, delMachine clusterv1.Machine, portRemap bool) (*clusteragent.Client, error) {
+	port := "25000"
+	if portRemap {
+		// https://github.com/canonical/cluster-api-control-plane-provider-microk8s/blob/v0.6.10/control-plane-components.yaml#L96-L102
+		port = "30000"
+	}
+
 	opts := clusteragent.Options{
 		IgnoreNodeIPs: sets.NewString(),
-		// NOTE(hue): Port is hard coded according to
-		// https://github.com/canonical/cluster-api-control-plane-provider-microk8s/blob/v0.6.10/control-plane-components.yaml#L96-L102
-		Port: "30000",
+		Port:          port,
 	}
 	// NOTE(hue): We want to pick a random machine's IP to call POST /dqlite/remove on its cluster agent endpoint.
 	// This machine should preferably not be the <delMachine> itself but this is not forced by Microk8s.
@@ -635,13 +641,17 @@ func getClusterAgentClient(machines []clusterv1.Machine, delMachine clusterv1.Ma
 }
 
 // removeMicrok8sNode removes the node from
-func (r *MicroK8sControlPlaneReconciler) removeNodeFromDqlite(ctx context.Context, clusterAgentClient *clusteragent.Client, delMachine clusterv1.Machine) error {
+func (r *MicroK8sControlPlaneReconciler) removeNodeFromDqlite(ctx context.Context, clusterAgentClient *clusteragent.Client, delMachine clusterv1.Machine, portRemap bool) error {
+	dqlitePort := "19001"
+	if portRemap {
+		// https://github.com/canonical/cluster-api-control-plane-provider-microk8s/blob/v0.6.10/control-plane-components.yaml#L96-L102
+		dqlitePort = "2379"
+	}
+
 	var removeEp string
 	for _, addr := range delMachine.Status.Addresses {
 		if ip := net.ParseIP(addr.Address); ip != nil {
-			// NOTE(hue): Port is hard coded according to
-			// https://github.com/canonical/cluster-api-control-plane-provider-microk8s/blob/v0.6.10/control-plane-components.yaml#L96-L102
-			removeEp = fmt.Sprintf("%s:2379", addr.Address)
+			removeEp = fmt.Sprintf("%s:%s", addr.Address, dqlitePort)
 			break
 		}
 	}

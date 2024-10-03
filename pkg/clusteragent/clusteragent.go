@@ -19,9 +19,6 @@ import (
 type Options struct {
 	// IgnoreMachineNames is a set of ignored machine names that we don't want to pick their IP for the cluster agent endpoint.
 	IgnoreMachineNames sets.String
-	// InsecureSkipVerify skips the verification of the server's certificate chain and host name.
-	// This is mostly used for testing purposes.
-	InsecureSkipVerify bool
 }
 
 type Client struct {
@@ -51,18 +48,19 @@ func NewClient(machines []clusterv1.Machine, port string, timeout time.Duration,
 		return nil, errors.New("failed to find an IP for cluster agent")
 	}
 
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: opts.InsecureSkipVerify,
-		},
-	}
-
 	return &Client{
 		ip:   ip,
 		port: port,
 		client: &http.Client{
-			Timeout:   timeout,
-			Transport: transport,
+			Timeout: timeout,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					// TODO(Hue): Workaround for now, address later on
+					// get the certificate fingerprint from the matching node through a resource in the cluster (TBD),
+					//  and validate it in the TLSClientConfig
+					InsecureSkipVerify: true,
+				},
+			},
 		},
 	}, nil
 }

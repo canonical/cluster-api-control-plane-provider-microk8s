@@ -34,7 +34,7 @@ func TestRemoveFromDqlite(t *testing.T) {
 				},
 			},
 		},
-	}, port, time.Second, clusteragent.Options{InsecureSkipVerify: true})
+	}, port, time.Second, clusteragent.Options{})
 
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(c.RemoveNodeFromDqlite(context.Background(), "1.1.1.1:1234")).To(Succeed())

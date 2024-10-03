@@ -145,7 +145,7 @@ func TestDo(t *testing.T) {
 				},
 			},
 		},
-	}, port, time.Second, clusteragent.Options{InsecureSkipVerify: true})
+	}, port, time.Second, clusteragent.Options{})
 
 	g.Expect(err).ToNot(HaveOccurred())
 

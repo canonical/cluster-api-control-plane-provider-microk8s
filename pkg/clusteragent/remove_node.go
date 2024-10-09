@@ -9,5 +9,12 @@ import (
 // The endpoint should be in the format of "address:port".
 func (p *Client) RemoveNodeFromDqlite(ctx context.Context, removeEp string) error {
 	request := map[string]string{"removeEndpoint": removeEp}
-	return p.Do(ctx, http.MethodPost, "cluster/api/v2.0/dqlite/remove", request, nil)
+
+	// // TODO(Hue): change the token
+	// callbackToken := "myRandomToken"
+	// header := map[string][]string{
+	// 	"callback_token": {callbackToken},
+	// }
+
+	return p.do(ctx, http.MethodPost, "cluster/api/v2.0/dqlite/remove", request, nil, nil)
 }

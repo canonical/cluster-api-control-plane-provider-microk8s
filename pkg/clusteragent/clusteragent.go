@@ -69,10 +69,10 @@ func (c *Client) Endpoint() string {
 	return fmt.Sprintf("https://%s:%s", c.ip, c.port)
 }
 
-// Do makes a request to the given endpoint with the given method. It marshals the request and unmarshals
+// do makes a request to the given endpoint with the given method. It marshals the request and unmarshals
 // server response body if the provided response is not nil.
 // The endpoint should _not_ have a leading slash.
-func (c *Client) Do(ctx context.Context, method, endpoint string, request any, response any) error {
+func (c *Client) do(ctx context.Context, method, endpoint string, request any, header map[string][]string, response any) error {
 	url := fmt.Sprintf("https://%s:%s/%s", c.ip, c.port, endpoint)
 
 	requestBody, err := json.Marshal(request)
@@ -84,6 +84,8 @@ func (c *Client) Do(ctx context.Context, method, endpoint string, request any, r
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
+
+	req.Header = http.Header(header)
 
 	res, err := c.client.Do(req)
 	if err != nil {

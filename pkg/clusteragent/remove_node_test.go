@@ -19,6 +19,7 @@ func TestRemoveFromDqlite(t *testing.T) {
 	g := NewWithT(t)
 
 	path := "/cluster/api/v2.0/dqlite/remove"
+	token := "myRandomToken"
 	method := http.MethodPost
 	servM := httptest.NewServerMock(method, path, nil)
 	defer servM.Srv.Close()
@@ -38,8 +39,7 @@ func TestRemoveFromDqlite(t *testing.T) {
 	}, port, time.Second, clusteragent.Options{})
 
 	g.Expect(err).ToNot(HaveOccurred())
-	g.Expect(c.RemoveNodeFromDqlite(context.Background(), "1.1.1.1:1234")).To(Succeed())
-	g.Expect(servM.Request).To(HaveKeyWithValue("removeEndpoint", "1.1.1.1:1234"))
-	// // TODO(Hue): change the token
-	// g.Expect(servM.Header.Get("callback_token")).To(Equal("myRandomToken"))
+	g.Expect(c.RemoveNodeFromDqlite(context.Background(), token, "1.1.1.1:1234")).To(Succeed())
+	g.Expect(servM.Request).To(HaveKeyWithValue("remove_endpoint", "1.1.1.1:1234"))
+	g.Expect(servM.Header.Get(clusteragent.AuthTokenHeader)).To(Equal(token))
 }

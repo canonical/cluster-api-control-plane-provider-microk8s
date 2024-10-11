@@ -11,6 +11,7 @@ import (
 
 	clusterv1beta1 "github.com/canonical/cluster-api-control-plane-provider-microk8s/api/v1beta1"
 	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/clusteragent"
+	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/token"
 	"golang.org/x/mod/semver"
 
 	"github.com/pkg/errors"
@@ -475,7 +476,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileDelete(ctx context.Context, cl
 	}
 
 	// clean up MicroK8s cluster secrets
-	for _, secretName := range []string{"kubeconfig", "ca", "jointoken"} {
+	for _, secretName := range []string{"kubeconfig", "ca", "jointoken", token.AuthTokenNameSuffix} {
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: cluster.Namespace,
@@ -594,12 +595,14 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 	// The issue is that we were not removing the endpoint from dqlite when we were deleting a machine.
 	// This would cause a situation were a joining node failed to join because the endpoint was already in the dqlite cluster.
 	// How? The IP assigned to the joining (new) node, previously belonged to a node that was deleted, but the IP is still there in dqlite.
-	// If we have 2 or more machines left, get cluster agent client and delete node from dqlite
-	if len(machines) > 1 {
+	// If we have 2 machines, deleting one is not safe because it can be the leader and we're not taking care of
+	// leadership transfers in the cluster-agent for now. Maybe something for later (TODO)
+	// If we have 3 or more machines left, get cluster agent client and delete node from dqlite.
+	if len(machines) > 2 {
 		portRemap := tcp != nil && tcp.Spec.ControlPlaneConfig.ClusterConfiguration != nil && tcp.Spec.ControlPlaneConfig.ClusterConfiguration.PortCompatibilityRemap
 
 		if clusterAgentClient, err := getClusterAgentClient(machines, deleteMachine, portRemap); err == nil {
-			if err := r.removeNodeFromDqlite(ctx, clusterAgentClient, deleteMachine, portRemap); err != nil {
+			if err := r.removeNodeFromDqlite(ctx, clusterAgentClient, cluster, deleteMachine, portRemap); err != nil {
 				logger.Error(err, "failed to remove node from dqlite: %w", "machineName", deleteMachine.Name, "nodeName", node.Name)
 			}
 		} else {
@@ -646,7 +649,8 @@ func getClusterAgentClient(machines []clusterv1.Machine, delMachine clusterv1.Ma
 }
 
 // removeMicrok8sNode removes the node from
-func (r *MicroK8sControlPlaneReconciler) removeNodeFromDqlite(ctx context.Context, clusterAgentClient *clusteragent.Client, delMachine clusterv1.Machine, portRemap bool) error {
+func (r *MicroK8sControlPlaneReconciler) removeNodeFromDqlite(ctx context.Context, clusterAgentClient *clusteragent.Client,
+	clusterKey client.ObjectKey, delMachine clusterv1.Machine, portRemap bool) error {
 	dqlitePort := defaultDqlitePort
 	if portRemap {
 		// https://github.com/canonical/cluster-api-control-plane-provider-microk8s/blob/v0.6.10/control-plane-components.yaml#L96-L102
@@ -665,7 +669,12 @@ func (r *MicroK8sControlPlaneReconciler) removeNodeFromDqlite(ctx context.Contex
 		return fmt.Errorf("failed to extract endpoint of the deleting machine %q", delMachine.Name)
 	}
 
-	if err := clusterAgentClient.RemoveNodeFromDqlite(ctx, removeEp); err != nil {
+	token, err := token.Lookup(ctx, r.Client, clusterKey)
+	if err != nil {
+		return fmt.Errorf("failed to lookup token: %w", err)
+	}
+
+	if err := clusterAgentClient.RemoveNodeFromDqlite(ctx, token, removeEp); err != nil {
 		return fmt.Errorf("failed to remove node %q from dqlite: %w", removeEp, err)
 	}
 

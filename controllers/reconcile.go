@@ -595,8 +595,10 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 	// The issue is that we were not removing the endpoint from dqlite when we were deleting a machine.
 	// This would cause a situation were a joining node failed to join because the endpoint was already in the dqlite cluster.
 	// How? The IP assigned to the joining (new) node, previously belonged to a node that was deleted, but the IP is still there in dqlite.
-	// If we have 2 or more machines left, get cluster agent client and delete node from dqlite
-	if len(machines) > 1 {
+	// If we have 2 machines, deleting one is not safe because it can be the leader and we're not taking care of
+	// leadership transfers in the cluster-agent for now. Maybe something for later (TODO)
+	// If we have 3 or more machines left, get cluster agent client and delete node from dqlite.
+	if len(machines) > 2 {
 		portRemap := tcp != nil && tcp.Spec.ControlPlaneConfig.ClusterConfiguration != nil && tcp.Spec.ControlPlaneConfig.ClusterConfiguration.PortCompatibilityRemap
 
 		if clusterAgentClient, err := getClusterAgentClient(machines, deleteMachine, portRemap); err == nil {

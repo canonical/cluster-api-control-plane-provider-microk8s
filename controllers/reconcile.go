@@ -116,7 +116,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileNodeHealth(ctx context.Context
 		}
 
 		conditions.MarkFalse(mcp, clusterv1beta1.ControlPlaneComponentsHealthyCondition, reason,
-			clusterv1.ConditionSeverityWarning, err.Error())
+			clusterv1.ConditionSeverityWarning, err.Error()) // nolint: govet
 
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, err
 	} else {
@@ -301,7 +301,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 	default:
 		if !mcp.Status.Bootstrapped {
 			if err := r.bootstrapCluster(ctx, mcp, cluster, machines); err != nil {
-				conditions.MarkFalse(mcp, clusterv1beta1.MachinesBootstrapped, clusterv1beta1.WaitingForMicroK8sBootReason, clusterv1.ConditionSeverityInfo, err.Error())
+				conditions.MarkFalse(mcp, clusterv1beta1.MachinesBootstrapped, clusterv1beta1.WaitingForMicroK8sBootReason, clusterv1.ConditionSeverityInfo, err.Error()) // nolint: govet
 
 				logger.Info("bootstrap failed, retrying in 20 seconds")
 
@@ -369,7 +369,7 @@ func (r *MicroK8sControlPlaneReconciler) bootControlPlane(ctx context.Context, c
 	if err != nil {
 		conditions.MarkFalse(mcp, clusterv1beta1.MachinesCreatedCondition,
 			clusterv1beta1.InfrastructureTemplateCloningFailedReason,
-			clusterv1.ConditionSeverityError, err.Error())
+			clusterv1.ConditionSeverityError, err.Error()) // nolint: govet
 
 		return ctrl.Result{}, err
 	}
@@ -381,7 +381,7 @@ func (r *MicroK8sControlPlaneReconciler) bootControlPlane(ctx context.Context, c
 	if err != nil {
 		conditions.MarkFalse(mcp, clusterv1beta1.MachinesCreatedCondition,
 			clusterv1beta1.BootstrapTemplateCloningFailedReason,
-			clusterv1.ConditionSeverityError, err.Error())
+			clusterv1.ConditionSeverityError, err.Error()) // nolint: govet
 
 		return ctrl.Result{}, err
 	}
@@ -417,7 +417,7 @@ func (r *MicroK8sControlPlaneReconciler) bootControlPlane(ctx context.Context, c
 	if err := r.Client.Create(ctx, machine); err != nil {
 		conditions.MarkFalse(mcp, clusterv1beta1.MachinesCreatedCondition,
 			clusterv1beta1.MachineGenerationFailedReason,
-			clusterv1.ConditionSeverityError, err.Error())
+			clusterv1.ConditionSeverityError, err.Error()) // nolint: govet
 
 		return ctrl.Result{}, errors.Wrap(err, "Failed to create machine")
 	}

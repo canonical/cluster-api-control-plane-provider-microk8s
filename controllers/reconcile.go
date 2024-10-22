@@ -12,6 +12,7 @@ import (
 	clusterv1beta1 "github.com/canonical/cluster-api-control-plane-provider-microk8s/api/v1beta1"
 	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/clusteragent"
 	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/token"
+	"github.com/go-logr/logr"
 	"golang.org/x/mod/semver"
 
 	"github.com/pkg/errors"
@@ -33,9 +34,8 @@ import (
 )
 
 const (
-	defaultClusterAgentPort          string        = "25000"
-	defaultDqlitePort                string        = "19001"
-	defaultClusterAgentClientTimeout time.Duration = 10 * time.Second
+	defaultClusterAgentPort string = "25000"
+	defaultDqlitePort       string = "19001"
 )
 
 type errServiceUnhealthy struct {
@@ -601,7 +601,14 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 	if len(machines) > 2 {
 		portRemap := tcp != nil && tcp.Spec.ControlPlaneConfig.ClusterConfiguration != nil && tcp.Spec.ControlPlaneConfig.ClusterConfiguration.PortCompatibilityRemap
 
-		if clusterAgentClient, err := getClusterAgentClient(machines, deleteMachine, portRemap); err == nil {
+		kubeclient, err := r.kubeconfigForCluster(ctx, cluster)
+		if err != nil {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
+		}
+
+		defer kubeclient.Close() //nolint:errcheck
+
+		if clusterAgentClient, err := getClusterAgentClient(kubeclient, logger, machines, deleteMachine, portRemap); err == nil {
 			if err := r.removeNodeFromDqlite(ctx, clusterAgentClient, cluster, deleteMachine, portRemap); err != nil {
 				logger.Error(err, "failed to remove node from dqlite: %w", "machineName", deleteMachine.Name, "nodeName", node.Name)
 			}
@@ -627,7 +634,7 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 	return ctrl.Result{Requeue: true}, nil
 }
 
-func getClusterAgentClient(machines []clusterv1.Machine, delMachine clusterv1.Machine, portRemap bool) (*clusteragent.Client, error) {
+func getClusterAgentClient(kubeclient *kubernetesClient, logger logr.Logger, machines []clusterv1.Machine, delMachine clusterv1.Machine, portRemap bool) (*clusteragent.Client, error) {
 	opts := clusteragent.Options{
 		// NOTE(hue): We want to pick a random machine's IP to call POST /dqlite/remove on its cluster agent endpoint.
 		// This machine should preferably not be the <delMachine> itself, although this is not forced by Microk8s.
@@ -640,7 +647,7 @@ func getClusterAgentClient(machines []clusterv1.Machine, delMachine clusterv1.Ma
 		port = "30000"
 	}
 
-	clusterAgentClient, err := clusteragent.NewClient(machines, port, defaultClusterAgentClientTimeout, opts)
+	clusterAgentClient, err := clusteragent.NewClient(kubeclient, logger, machines, port, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize cluster agent client: %w", err)
 	}

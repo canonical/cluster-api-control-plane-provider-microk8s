@@ -1,114 +1,224 @@
 package clusteragent
 
 import (
-	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
-	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+
+	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/control"
 )
 
 // Options should be used when initializing a new client.
 type Options struct {
-	// IgnoreMachineNames is a set of ignored machine names that we don't want to pick their IP for the cluster agent endpoint.
+	// IgnoreMachineNames is a set of ignored machine names that we don't want to pick their node name for the cluster agent.
 	IgnoreMachineNames sets.String
+	// SkipSucceededCheck skips the waiting for succeeded phase on pod. Mostly used for testing purposes.
+	SkipSucceededCheck bool
+	// SkipPodCleanup skips the pod cleanup after the request is done. Mostly used for testing purposes.
+	SkipPodCleanup bool
 }
 
+// KubeClient is an interface for the Kubernetes client.
+type KubeClient interface {
+	CoreV1() corev1client.CoreV1Interface
+}
+
+// Client is a client for the cluster agent.
 type Client struct {
-	ip, port string
-	client   *http.Client
+	KubeClient
+	logger    Logger
+	nodeName  string
+	namespace string
+	ip        string
+	port      string
+
+	skipSucceededCheck bool
+	skipPodCleanup     bool
 }
 
-// NewClient picks an IP from one of the given machines and creates a new client for the cluster agent
-// with that IP.
-func NewClient(machines []clusterv1.Machine, port string, timeout time.Duration, opts Options) (*Client, error) {
+// Logger is an interface for logging.
+type Logger interface {
+	Info(msg string, keysAndValues ...interface{})
+	Error(err error, msg string, keysAndValues ...interface{})
+}
+
+// NewClient picks a node name and IP from one of the given machines and creates a new client for the cluster agent.
+func NewClient(kubeclient KubeClient, logger Logger, machines []clusterv1.Machine, port string, opts Options) (*Client, error) {
+	var nodeName string
 	var ip string
 	for _, m := range machines {
+		if !m.DeletionTimestamp.IsZero() {
+			continue
+		}
+
 		if opts.IgnoreMachineNames.Has(m.Name) {
 			continue
 		}
 
-		for _, addr := range m.Status.Addresses {
-			if net.ParseIP(addr.Address) != nil {
-				ip = addr.Address
-				break
+		if m.Status.NodeRef != nil {
+			nodeName = m.Status.NodeRef.Name
+			for _, addr := range m.Status.Addresses {
+				if net.ParseIP(addr.Address) != nil {
+					ip = addr.Address
+					break
+				}
 			}
+			break
 		}
-		break
+	}
+
+	if nodeName == "" {
+		return nil, errors.New("failed to find a node for cluster agent")
 	}
 
 	if ip == "" {
-		return nil, errors.New("failed to find an IP for cluster agent")
+		return nil, errors.New("failed to find an IP address for cluster agent")
 	}
 
 	return &Client{
-		ip:   ip,
-		port: port,
-		client: &http.Client{
-			Timeout: timeout,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					// TODO(Hue): Workaround for now, address later on
-					// get the certificate fingerprint from the matching node through a resource in the cluster (TBD),
-					//  and validate it in the TLSClientConfig
-					InsecureSkipVerify: true,
-				},
-			},
-		},
+		KubeClient:         kubeclient,
+		logger:             logger,
+		nodeName:           nodeName,
+		namespace:          "default",
+		ip:                 ip,
+		port:               port,
+		skipSucceededCheck: opts.SkipSucceededCheck,
+		skipPodCleanup:     opts.SkipPodCleanup,
 	}, nil
 }
 
-func (c *Client) Endpoint() string {
-	return fmt.Sprintf("https://%s:%s", c.ip, c.port)
+// do sends a request to the cluster agent.
+func (c *Client) do(ctx context.Context, method, endpoint string, header http.Header, data map[string]any) error {
+	pod, err := c.createPod(ctx, method, endpoint, header, data)
+	if err != nil {
+		return fmt.Errorf("failed to create pod: %w", err)
+	}
+
+	if !c.skipPodCleanup {
+		defer func() {
+			if err := c.deletePod(ctx, pod.Name); err != nil {
+				c.logger.Error(err, "failed to delete pod")
+			}
+		}()
+	}
+
+	if c.skipSucceededCheck {
+		return nil
+	}
+
+	podName := pod.Name
+	if err := control.WaitUntilReady(ctx, func() (bool, error) {
+		pod, err := c.CoreV1().Pods(c.namespace).Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Errorf("failed to get pod: %w", err)
+		}
+
+		if pod.Status.Phase == corev1.PodSucceeded {
+			return true, nil
+		}
+		if pod.Status.Phase == corev1.PodFailed {
+			return false, fmt.Errorf("pod failed")
+		}
+
+		return false, nil
+	}, control.WaitOptions{NumRetries: ptr.To(120)}); err != nil {
+		return fmt.Errorf("failed to wait for pod to succeed: %w", err)
+	}
+
+	return nil
 }
 
-// do makes a request to the given endpoint with the given method. It marshals the request and unmarshals
-// server response body if the provided response is not nil.
-// The endpoint should _not_ have a leading slash.
-func (c *Client) do(ctx context.Context, method, endpoint string, request any, header map[string][]string, response any) error {
-	url := fmt.Sprintf("https://%s:%s/%s", c.ip, c.port, endpoint)
-
-	requestBody, err := json.Marshal(request)
+// createPod creates a pod that runs a curl command.
+func (c *Client) createPod(ctx context.Context, method, endpoint string, header http.Header, data map[string]any) (*corev1.Pod, error) {
+	curl, err := c.createCURLString(method, endpoint, header, data)
 	if err != nil {
-		return fmt.Errorf("failed to prepare worker info request: %w", err)
+		return nil, fmt.Errorf("failed to create curl string: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(requestBody))
+	c.logger.Info("creating curl pod", "cmd", curl)
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: fmt.Sprintf("cluster-agent-caller-%s", c.nodeName),
+		},
+		Spec: corev1.PodSpec{
+			NodeName: c.nodeName,
+			Containers: []corev1.Container{
+				{
+					Name:  "caller",
+					Image: "curlimages/curl:7.87.0",
+					Command: []string{
+						"su",
+						"-c",
+						curl,
+					},
+					SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true), RunAsUser: ptr.To(int64(0))},
+				},
+			},
+			RestartPolicy: corev1.RestartPolicyNever,
+		},
+	}
+
+	pod, err = c.CoreV1().Pods(c.namespace).Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create pod: %w", err)
 	}
 
-	req.Header = http.Header(header)
+	return pod, nil
+}
 
-	res, err := c.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to call cluster agent: %w", err)
-	}
-	defer res.Body.Close()
+// createCURLString creates a curl command string.
+func (c *Client) createCURLString(method, endpoint string, header http.Header, data map[string]any) (string, error) {
+	// Method
+	req := fmt.Sprintf("curl -k -X %s", method)
 
-	if res.StatusCode != http.StatusOK {
-		// NOTE(hue): Marshal and print any response that we got since it might contain valuable information
-		// on why the request failed.
-		// Ignore JSON errors to prevent unnecessarily complicated error handling.
-		anyResp := make(map[string]any)
-		_ = json.NewDecoder(res.Body).Decode(&anyResp)
-		b, _ := json.Marshal(anyResp)
-		resStr := string(b)
-
-		return fmt.Errorf("HTTP request to cluster agent failed with status code %d, got response: %q", res.StatusCode, resStr)
-	}
-
-	if response != nil {
-		if err := json.NewDecoder(res.Body).Decode(response); err != nil {
-			return fmt.Errorf("failed to decode response: %w", err)
+	// Headers
+	for h, vv := range header {
+		for _, v := range vv {
+			req += fmt.Sprintf(" -H \"%s: %s\"", h, v)
 		}
+	}
+
+	// Data
+	if data != nil {
+		dataB, err := json.Marshal(data)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal data: %w", err)
+		}
+		req += fmt.Sprintf(" -d '%s'", string(dataB))
+	}
+
+	// Endpoint
+	req += fmt.Sprintf(" https://%s:%s/%s", c.ip, c.port, endpoint)
+
+	return req, nil
+}
+
+// deletePod deletes a pod.
+func (c *Client) deletePod(ctx context.Context, podName string) error {
+	deleteOptions := metav1.DeleteOptions{
+		GracePeriodSeconds: ptr.To(int64(0)),
+	}
+
+	if err := control.WaitUntilReady(ctx, func() (bool, error) {
+		err := c.CoreV1().Pods(c.namespace).Delete(ctx, podName, deleteOptions)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return true, nil
+	}, control.WaitOptions{NumRetries: ptr.To(120)}); err != nil {
+		return fmt.Errorf("failed to wait for pod deletion: %w", err)
 	}
 
 	return nil

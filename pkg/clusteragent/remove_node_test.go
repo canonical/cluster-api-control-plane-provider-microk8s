@@ -2,44 +2,65 @@ package clusteragent_test
 
 import (
 	"context"
-	"net"
-	"net/http"
-	"strings"
+	"fmt"
 	"testing"
-	"time"
 
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 
 	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/clusteragent"
-	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/httptest"
 )
 
 func TestRemoveFromDqlite(t *testing.T) {
 	g := NewWithT(t)
 
-	path := "/cluster/api/v2.0/dqlite/remove"
-	token := "myRandomToken"
-	method := http.MethodPost
-	servM := httptest.NewServerMock(method, path, nil)
-	defer servM.Srv.Close()
-
-	ip, port, err := net.SplitHostPort(strings.TrimPrefix(servM.Srv.URL, "https://"))
-	g.Expect(err).ToNot(HaveOccurred())
-	c, err := clusteragent.NewClient([]clusterv1.Machine{
+	token := "token"
+	port := "1234"
+	removeEp := "1.1.1.1:9876"
+	machineIP := "5.6.7.8"
+	kubeclient := fake.NewSimpleClientset()
+	c, err := clusteragent.NewClient(kubeclient, newLogger(), []clusterv1.Machine{
 		{
 			Status: clusterv1.MachineStatus{
+				NodeRef: &corev1.ObjectReference{
+					Name: "node-1",
+				},
 				Addresses: clusterv1.MachineAddresses{
 					{
-						Address: ip,
+						Address: machineIP,
 					},
 				},
 			},
 		},
-	}, port, time.Second, clusteragent.Options{})
+	}, port, clusteragent.Options{SkipSucceededCheck: true, SkipPodCleanup: true})
 
 	g.Expect(err).ToNot(HaveOccurred())
-	g.Expect(c.RemoveNodeFromDqlite(context.Background(), token, "1.1.1.1:1234")).To(Succeed())
-	g.Expect(servM.Request).To(HaveKeyWithValue("remove_endpoint", "1.1.1.1:1234"))
-	g.Expect(servM.Header.Get(clusteragent.AuthTokenHeader)).To(Equal(token))
+	g.Expect(c.RemoveNodeFromDqlite(context.Background(), token, removeEp)).To(Succeed())
+
+	pod, err := kubeclient.CoreV1().Pods("default").Get(context.Background(), "cluster-agent-caller-node-1", v1.GetOptions{})
+	g.Expect(err).ToNot(HaveOccurred())
+	g.Expect(pod.Spec.Containers).To(HaveLen(1))
+
+	container := pod.Spec.Containers[0]
+	g.Expect(container.Command).To(HaveLen(3))
+	g.Expect(container.Command[2]).To(Equal(fmt.Sprintf("curl -k -X POST -H \"capi-auth-token: %s\" -d '{\"remove_endpoint\":\"%s\"}' https://%s:%s/cluster/api/v2.0/dqlite/remove", token, removeEp, machineIP, port)))
+}
+
+func newLogger() clusteragent.Logger {
+	return &mockLogger{}
+}
+
+type mockLogger struct {
+	entries []string
+}
+
+func (l *mockLogger) Info(msg string, keysAndValues ...interface{}) {
+	l.entries = append(l.entries, msg)
+}
+
+func (l *mockLogger) Error(err error, msg string, keysAndValues ...interface{}) {
+	l.entries = append(l.entries, msg)
 }

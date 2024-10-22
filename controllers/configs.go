@@ -28,7 +28,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/connrotation"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -241,7 +241,7 @@ func (r *MicroK8sControlPlaneReconciler) generateMicroK8sConfig(ctx context.Cont
 		Kind:               "MicroK8sControlPlane",
 		Name:               tcp.Name,
 		UID:                tcp.UID,
-		BlockOwnerDeletion: pointer.BoolPtr(true),
+		BlockOwnerDeletion: ptr.To(true),
 	}
 
 	bootstrapConfig := &bootstrapv1beta1.MicroK8sConfig{

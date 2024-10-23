@@ -603,7 +603,7 @@ func (r *MicroK8sControlPlaneReconciler) scaleDownControlPlane(ctx context.Conte
 
 		kubeclient, err := r.kubeconfigForCluster(ctx, cluster)
 		if err != nil {
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("failed to get kubeconfig for cluster: %w", err)
 		}
 
 		defer kubeclient.Close() //nolint:errcheck

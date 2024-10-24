@@ -21,12 +21,13 @@ func TestRemoveFromDqlite(t *testing.T) {
 	port := "1234"
 	removeEp := "1.1.1.1:9876"
 	machineIP := "5.6.7.8"
+	nodeName := "node-1"
 	kubeclient := fake.NewSimpleClientset()
 	c, err := clusteragent.NewClient(kubeclient, newLogger(), []clusterv1.Machine{
 		{
 			Status: clusterv1.MachineStatus{
 				NodeRef: &corev1.ObjectReference{
-					Name: "node-1",
+					Name: nodeName,
 				},
 				Addresses: clusterv1.MachineAddresses{
 					{
@@ -40,7 +41,7 @@ func TestRemoveFromDqlite(t *testing.T) {
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(c.RemoveNodeFromDqlite(context.Background(), token, removeEp)).To(Succeed())
 
-	pod, err := kubeclient.CoreV1().Pods("default").Get(context.Background(), "cluster-agent-caller-node-1", v1.GetOptions{})
+	pod, err := kubeclient.CoreV1().Pods(clusteragent.DefaultPodNameSpace).Get(context.Background(), fmt.Sprintf(clusteragent.CallerPodNameFormat, nodeName), v1.GetOptions{})
 	g.Expect(err).ToNot(HaveOccurred())
 	g.Expect(pod.Spec.Containers).To(HaveLen(1))
 

@@ -11,6 +11,7 @@ import (
 
 	clusterv1beta1 "github.com/canonical/cluster-api-control-plane-provider-microk8s/api/v1beta1"
 	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/clusteragent"
+	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/images"
 	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/token"
 	"github.com/go-logr/logr"
 	"golang.org/x/mod/semver"
@@ -703,7 +704,7 @@ func createUpgradePod(ctx context.Context, kubeclient *kubernetesClient, nodeNam
 			Containers: []corev1.Container{
 				{
 					Name:  "upgrade",
-					Image: "curlimages/curl:7.87.0",
+					Image: images.CurlImage,
 					Command: []string{
 						"su",
 						"-c",

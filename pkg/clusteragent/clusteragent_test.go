@@ -2,9 +2,11 @@ package clusteragent
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"testing"
 
+	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/images"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -126,24 +128,54 @@ func TestDo(t *testing.T) {
 	g := NewWithT(t)
 
 	kubeclient := fake.NewSimpleClientset()
+	nodeName := "node"
+	nodeAddress := "5.6.7.8"
+	port := "1234"
+	method := "POST"
+	endpoint := "my/endpoint"
+	dataKey, dataValue := "dkey", "dvalue"
+	data := map[string]any{
+		dataKey: dataValue,
+	}
+	headerKey, headerValue := "hkey", "hvalue"
+	header := map[string][]string{
+		headerKey: {headerValue},
+	}
+
 	c, err := NewClient(kubeclient, newLogger(), []clusterv1.Machine{
 		{
 			Status: clusterv1.MachineStatus{
 				NodeRef: &corev1.ObjectReference{
-					Name: "node",
+					Name: nodeName,
 				},
 				Addresses: clusterv1.MachineAddresses{
 					{
-						Address: "5.6.7.8",
+						Address: nodeAddress,
 					},
 				},
 			},
 		},
-	}, "1234", Options{SkipSucceededCheck: true})
+	}, port, Options{SkipSucceededCheck: true, SkipPodCleanup: true})
 
 	g.Expect(err).ToNot(HaveOccurred())
 
-	g.Expect(c.do(context.Background(), "POST", "/my/endpoint", nil, nil)).To(Succeed())
+	g.Expect(c.do(context.Background(), method, endpoint, header, data)).To(Succeed())
+
+	pod, err := kubeclient.CoreV1().Pods(DefaultPodNameSpace).Get(context.Background(), fmt.Sprintf(CallerPodNameFormat, nodeName), v1.GetOptions{})
+	g.Expect(err).ToNot(HaveOccurred())
+
+	g.Expect(pod.Spec.NodeName).To(Equal(nodeName))
+	g.Expect(pod.Spec.Containers).To(HaveLen(1))
+
+	container := pod.Spec.Containers[0]
+	g.Expect(container.Image).To(Equal(images.CurlImage))
+	g.Expect(*container.SecurityContext.Privileged).To(BeTrue())
+	g.Expect(*container.SecurityContext.RunAsUser).To(Equal(int64(0)))
+	g.Expect(container.Command).To(HaveLen(3))
+	g.Expect(container.Command[2]).To(Equal(fmt.Sprintf(
+		"curl -k -X %s -H \"%s: %s\" -d '{\"%s\":\"%s\"}' https://%s:%s/%s",
+		method, headerKey, headerValue, dataKey, dataValue, nodeAddress, port, endpoint,
+	)))
 }
 
 func shuffleMachines(src []clusterv1.Machine) []clusterv1.Machine {

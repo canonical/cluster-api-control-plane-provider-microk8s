@@ -17,6 +17,12 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 
 	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/control"
+	"github.com/canonical/cluster-api-control-plane-provider-microk8s/pkg/images"
+)
+
+const (
+	CallerPodNameFormat string = "cluster-agent-caller-%s"
+	DefaultPodNameSpace string = "default"
 )
 
 // Options should be used when initializing a new client.
@@ -90,7 +96,7 @@ func NewClient(kubeclient KubeClient, logger Logger, machines []clusterv1.Machin
 		KubeClient:         kubeclient,
 		logger:             logger,
 		nodeName:           nodeName,
-		namespace:          "default",
+		namespace:          DefaultPodNameSpace,
 		ip:                 ip,
 		port:               port,
 		skipSucceededCheck: opts.SkipSucceededCheck,
@@ -150,14 +156,14 @@ func (c *Client) createPod(ctx context.Context, method, endpoint string, header 
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("cluster-agent-caller-%s", c.nodeName),
+			Name: fmt.Sprintf(CallerPodNameFormat, c.nodeName),
 		},
 		Spec: corev1.PodSpec{
 			NodeName: c.nodeName,
 			Containers: []corev1.Container{
 				{
 					Name:  "caller",
-					Image: "curlimages/curl:7.87.0",
+					Image: images.CurlImage,
 					Command: []string{
 						"su",
 						"-c",

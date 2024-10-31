@@ -147,6 +147,13 @@ func (c *Client) do(ctx context.Context, method, endpoint string, header http.He
 
 // createPod creates a pod that runs a curl command.
 func (c *Client) createPod(ctx context.Context, method, endpoint string, header http.Header, data map[string]any) (*corev1.Pod, error) {
+	podName := fmt.Sprintf(CallerPodNameFormat, c.nodeName)
+
+	// delete the pod if it exists
+	if err := c.deletePod(ctx, podName); err != nil {
+		return nil, fmt.Errorf("failed to delete pod: %w", err)
+	}
+
 	curl, err := c.createCURLString(method, endpoint, header, data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create curl string: %w", err)
@@ -156,7 +163,7 @@ func (c *Client) createPod(ctx context.Context, method, endpoint string, header 
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf(CallerPodNameFormat, c.nodeName),
+			Name: podName,
 		},
 		Spec: corev1.PodSpec{
 			NodeName: c.nodeName,
@@ -211,7 +218,7 @@ func (c *Client) createCURLString(method, endpoint string, header http.Header, d
 	return req, nil
 }
 
-// deletePod deletes a pod.
+// deletePod deletes a pod. It will succeed if the pod doesn't exist.
 func (c *Client) deletePod(ctx context.Context, podName string) error {
 	deleteOptions := metav1.DeleteOptions{
 		GracePeriodSeconds: ptr.To(int64(0)),

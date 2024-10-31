@@ -125,57 +125,114 @@ func TestClient(t *testing.T) {
 }
 
 func TestDo(t *testing.T) {
-	g := NewWithT(t)
+	t.Run("Success", func(t *testing.T) {
+		g := NewWithT(t)
 
-	kubeclient := fake.NewSimpleClientset()
-	nodeName := "node"
-	nodeAddress := "5.6.7.8"
-	port := "1234"
-	method := "POST"
-	endpoint := "my/endpoint"
-	dataKey, dataValue := "dkey", "dvalue"
-	data := map[string]any{
-		dataKey: dataValue,
-	}
-	headerKey, headerValue := "hkey", "hvalue"
-	header := map[string][]string{
-		headerKey: {headerValue},
-	}
+		kubeclient := fake.NewSimpleClientset()
+		nodeName := "node"
+		nodeAddress := "5.6.7.8"
+		port := "1234"
+		method := "POST"
+		endpoint := "my/endpoint"
+		dataKey, dataValue := "dkey", "dvalue"
+		data := map[string]any{
+			dataKey: dataValue,
+		}
+		headerKey, headerValue := "hkey", "hvalue"
+		header := map[string][]string{
+			headerKey: {headerValue},
+		}
 
-	c, err := NewClient(kubeclient, newLogger(), []clusterv1.Machine{
-		{
-			Status: clusterv1.MachineStatus{
-				NodeRef: &corev1.ObjectReference{
-					Name: nodeName,
-				},
-				Addresses: clusterv1.MachineAddresses{
-					{
-						Address: nodeAddress,
+		c, err := NewClient(kubeclient, newLogger(), []clusterv1.Machine{
+			{
+				Status: clusterv1.MachineStatus{
+					NodeRef: &corev1.ObjectReference{
+						Name: nodeName,
+					},
+					Addresses: clusterv1.MachineAddresses{
+						{
+							Address: nodeAddress,
+						},
 					},
 				},
 			},
-		},
-	}, port, Options{SkipSucceededCheck: true, SkipPodCleanup: true})
+		}, port, Options{SkipSucceededCheck: true, SkipPodCleanup: true})
 
-	g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(err).ToNot(HaveOccurred())
 
-	g.Expect(c.do(context.Background(), method, endpoint, header, data)).To(Succeed())
+		g.Expect(c.do(context.Background(), method, endpoint, header, data)).To(Succeed())
 
-	pod, err := kubeclient.CoreV1().Pods(DefaultPodNameSpace).Get(context.Background(), fmt.Sprintf(CallerPodNameFormat, nodeName), v1.GetOptions{})
-	g.Expect(err).ToNot(HaveOccurred())
+		pod, err := kubeclient.CoreV1().Pods(DefaultPodNameSpace).Get(context.Background(), fmt.Sprintf(CallerPodNameFormat, nodeName), v1.GetOptions{})
+		g.Expect(err).ToNot(HaveOccurred())
 
-	g.Expect(pod.Spec.NodeName).To(Equal(nodeName))
-	g.Expect(pod.Spec.Containers).To(HaveLen(1))
+		g.Expect(pod.Spec.NodeName).To(Equal(nodeName))
+		g.Expect(pod.Spec.Containers).To(HaveLen(1))
 
-	container := pod.Spec.Containers[0]
-	g.Expect(container.Image).To(Equal(images.CurlImage))
-	g.Expect(*container.SecurityContext.Privileged).To(BeTrue())
-	g.Expect(*container.SecurityContext.RunAsUser).To(Equal(int64(0)))
-	g.Expect(container.Command).To(HaveLen(3))
-	g.Expect(container.Command[2]).To(Equal(fmt.Sprintf(
-		"curl -k -X %s -H \"%s: %s\" -d '{\"%s\":\"%s\"}' https://%s:%s/%s",
-		method, headerKey, headerValue, dataKey, dataValue, nodeAddress, port, endpoint,
-	)))
+		container := pod.Spec.Containers[0]
+		g.Expect(container.Image).To(Equal(images.CurlImage))
+		g.Expect(*container.SecurityContext.Privileged).To(BeTrue())
+		g.Expect(*container.SecurityContext.RunAsUser).To(Equal(int64(0)))
+		g.Expect(container.Command).To(HaveLen(3))
+		g.Expect(container.Command[2]).To(Equal(fmt.Sprintf(
+			"curl -k -X %s -H \"%s: %s\" -d '{\"%s\":\"%s\"}' https://%s:%s/%s",
+			method, headerKey, headerValue, dataKey, dataValue, nodeAddress, port, endpoint,
+		)))
+	})
+
+	t.Run("PodAlreadyExists", func(t *testing.T) {
+		g := NewWithT(t)
+
+		nodeName := "node"
+		podName := fmt.Sprintf(CallerPodNameFormat, nodeName)
+		kubeclient := fake.NewSimpleClientset(&corev1.Pod{ObjectMeta: v1.ObjectMeta{Name: podName, Namespace: "default"}})
+		nodeAddress := "5.6.7.8"
+		port := "1234"
+		method := "POST"
+		endpoint := "my/endpoint"
+		dataKey, dataValue := "dkey", "dvalue"
+		data := map[string]any{
+			dataKey: dataValue,
+		}
+		headerKey, headerValue := "hkey", "hvalue"
+		header := map[string][]string{
+			headerKey: {headerValue},
+		}
+
+		c, err := NewClient(kubeclient, newLogger(), []clusterv1.Machine{
+			{
+				Status: clusterv1.MachineStatus{
+					NodeRef: &corev1.ObjectReference{
+						Name: nodeName,
+					},
+					Addresses: clusterv1.MachineAddresses{
+						{
+							Address: nodeAddress,
+						},
+					},
+				},
+			},
+		}, port, Options{SkipSucceededCheck: true, SkipPodCleanup: true})
+
+		g.Expect(err).ToNot(HaveOccurred())
+
+		g.Expect(c.do(context.Background(), method, endpoint, header, data)).To(Succeed())
+
+		pod, err := kubeclient.CoreV1().Pods(DefaultPodNameSpace).Get(context.Background(), fmt.Sprintf(CallerPodNameFormat, nodeName), v1.GetOptions{})
+		g.Expect(err).ToNot(HaveOccurred())
+
+		g.Expect(pod.Spec.NodeName).To(Equal(nodeName))
+		g.Expect(pod.Spec.Containers).To(HaveLen(1))
+
+		container := pod.Spec.Containers[0]
+		g.Expect(container.Image).To(Equal(images.CurlImage))
+		g.Expect(*container.SecurityContext.Privileged).To(BeTrue())
+		g.Expect(*container.SecurityContext.RunAsUser).To(Equal(int64(0)))
+		g.Expect(container.Command).To(HaveLen(3))
+		g.Expect(container.Command[2]).To(Equal(fmt.Sprintf(
+			"curl -k -X %s -H \"%s: %s\" -d '{\"%s\":\"%s\"}' https://%s:%s/%s",
+			method, headerKey, headerValue, dataKey, dataValue, nodeAddress, port, endpoint,
+		)))
+	})
 }
 
 func shuffleMachines(src []clusterv1.Machine) []clusterv1.Machine {

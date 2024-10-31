@@ -23,6 +23,7 @@ import (
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/storage/names"
+	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/controllers/external"
 	"sigs.k8s.io/cluster-api/util"
@@ -142,7 +143,7 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 
 	if numMachines > 0 {
 		sort.Sort(SortByCreationTimestamp(machines))
-		oldVersion = semver.MajorMinor(*machines[0].Spec.Version)
+		oldVersion = getOldestVersion(machines)
 		newVersion = semver.MajorMinor(mcp.Spec.Version)
 	}
 
@@ -202,50 +203,51 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 
 			// For each machine, get the node and upgrade it
 			for _, machine := range machines {
+				if isMachineUpgraded(machine, newVersion) {
+					logger.Info("Machine already upgraded", "machine", machine.Name, "version", newVersion)
+					continue
+				}
+
+				if machine.Status.NodeRef == nil {
+					logger.Info("Machine does not have a nodeRef yet, requeueing...", "machine", machine.Name)
+					return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+				}
 
 				// Get the node for the machine
 				node, err := kubeclient.CoreV1().Nodes().Get(ctx, machine.Status.NodeRef.Name, metav1.GetOptions{})
 				if err != nil {
-					return ctrl.Result{RequeueAfter: 20 * time.Second}, err
+					return ctrl.Result{}, fmt.Errorf("failed to get node: %w", err)
 				}
 
 				logger.Info(fmt.Sprintf("Creating upgrade pod on %s...", node.Name))
 				pod, err := createUpgradePod(ctx, kubeclient, node.Name, mcp.Spec.Version)
 				if err != nil {
-					logger.Error(err, "Error creating upgrade pod.")
+					return ctrl.Result{}, fmt.Errorf("failed to create upgrade pod: %w", err)
 				}
 
-				logger.Info("Waiting for upgrade node to be updated to the given version...")
-				err = waitForNodeUpgrade(ctx, kubeclient, node.Name, mcp.Spec.Version)
-				if err != nil {
-					logger.Error(err, "Error waiting for node upgrade.")
+				logger.Info("Waiting for node to be updated to the given version...", "node", node.Name)
+				if err := waitForNodeUpgrade(ctx, kubeclient, node.Name, mcp.Spec.Version); err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to wait for node upgrade: %w", err)
 				}
 
-				time.Sleep(10 * time.Second)
-
-				// Get the current machine
+				logger.Info("Node upgraded successfully.", "node", node.Name)
+				// Update the machine version
 				currentMachine := &clusterv1.Machine{}
 				currentMachineName := node.Annotations["cluster.x-k8s.io/machine"]
-				err = r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: currentMachineName}, currentMachine)
-				if err != nil {
-					logger.Error(err, "Error getting machine.")
+				if err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: currentMachineName}, currentMachine); err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to get machine: %w", err)
 				}
 
-				// Update the machine version
+				logger.Info("Updating machine version...", "machine", currentMachine.Name)
 				currentMachine.Spec.Version = &mcp.Spec.Version
 				logger.Info(fmt.Sprintf("Now updating machine %s version to %s...", currentMachine.Name, *currentMachine.Spec.Version))
-				err = r.Client.Update(ctx, currentMachine)
-				if err != nil {
-					logger.Error(err, "Could not update the machine version. We will retry.")
+				if err := r.Client.Update(ctx, currentMachine); err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to update machine: %w", err)
 				}
 
-				time.Sleep(10 * time.Second)
-
-				// wait until pod is deleted
 				logger.Info(fmt.Sprintf("Removing upgrade pod %s from %s...", pod.ObjectMeta.Name, node.Name))
-				err = waitForPodDeletion(ctx, kubeclient, pod.ObjectMeta.Name)
-				if err != nil {
-					logger.Error(err, "Error waiting for pod deletion.")
+				if err := waitForPodDeletion(ctx, kubeclient, pod.ObjectMeta.Name); err != nil {
+					return ctrl.Result{}, fmt.Errorf("failed to wait for pod deletion: %w", err)
 				}
 
 				logger.Info(fmt.Sprintf("Upgrade of node %s completed.\n", node.Name))
@@ -689,18 +691,25 @@ func (r *MicroK8sControlPlaneReconciler) removeNodeFromDqlite(ctx context.Contex
 	return nil
 }
 
+// createUpgradePod creates a pod that upgrades the node to the given version.
+// If the upgrade pod already exists, it is deleted and a new one will be created.
 func createUpgradePod(ctx context.Context, kubeclient *kubernetesClient, nodeName string, nodeVersion string) (*corev1.Pod, error) {
-	nodeVersion = strings.TrimPrefix(semver.MajorMinor(nodeVersion), "v")
+	podName := "upgrade-pod"
 
-	uid := int64(0)
-	priv := true
+	// delete the pod if it exists
+	if err := waitForPodDeletion(ctx, kubeclient, podName); err != nil {
+		return nil, fmt.Errorf("failed to delete pod %s: %w", podName, err)
+	}
+
+	nodeVersion = strings.TrimPrefix(semver.MajorMinor(nodeVersion), "v")
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "upgrade-pod",
+			Name: podName,
 		},
 		Spec: corev1.PodSpec{
-			NodeName: nodeName,
+			NodeName:      nodeName,
+			RestartPolicy: corev1.RestartPolicyOnFailure,
 			Containers: []corev1.Container{
 				{
 					Name:  "upgrade",
@@ -709,7 +718,7 @@ func createUpgradePod(ctx context.Context, kubeclient *kubernetesClient, nodeNam
 						"su",
 						"-c",
 					},
-					SecurityContext: &corev1.SecurityContext{Privileged: &priv, RunAsUser: &uid},
+					SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true), RunAsUser: ptr.To(int64(0))},
 					Args: []string{
 						fmt.Sprintf("curl -X POST -H \"Content-Type: application/json\" --unix-socket /run/snapd.socket -d '{\"action\": \"refresh\",\"channel\":\"%s/stable\"}' http://localhost/v2/snaps/microk8s", nodeVersion),
 					},
@@ -736,47 +745,72 @@ func createUpgradePod(ctx context.Context, kubeclient *kubernetesClient, nodeNam
 
 	pod, err := kubeclient.CoreV1().Pods("default").Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create pod %s: %w", podName, err)
 	}
 
 	return pod, nil
 }
 
 func waitForNodeUpgrade(ctx context.Context, kubeclient *kubernetesClient, nodeName, nodeVersion string) error {
-	// attempt to connect 60 times. With a wait of 10 secs this should be 600 sec = 10 min
-	attempts := 60
-	for attempts > 0 {
+	for attempts := 100; attempts > 0; attempts-- {
 		node, err := kubeclient.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get node %s: %w", nodeName, err)
 		}
 		currentVersion := semver.MajorMinor(node.Status.NodeInfo.KubeletVersion)
 		nodeVersion = semver.MajorMinor(nodeVersion)
 		if strings.HasPrefix(currentVersion, nodeVersion) {
-			break
+			return nil
 		}
-		time.Sleep(10 * time.Second)
-		attempts--
+
+		time.Sleep(3 * time.Second)
 	}
-	return nil
+
+	return fmt.Errorf("timed out waiting for node %s to be upgraded to version %s", nodeName, nodeVersion)
 }
 
+// waitForPodDeletion waits for the pod to be deleted. If the pod doesn't exist, it returns nil.
 func waitForPodDeletion(ctx context.Context, kubeclient *kubernetesClient, podName string) error {
-	for {
-		gracePeriod := int64(0)
+	var err error
+	for attempts := 5; attempts > 0; attempts-- {
 		deleteOptions := metav1.DeleteOptions{
-			GracePeriodSeconds: &gracePeriod,
+			GracePeriodSeconds: ptr.To(int64(0)),
 		}
-		err := kubeclient.CoreV1().Pods("default").Delete(ctx, podName, deleteOptions)
-		time.Sleep(10 * time.Second)
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				break
-			}
-			return err
-		} else {
-			break
+		err = kubeclient.CoreV1().Pods("default").Delete(ctx, podName, deleteOptions)
+		if err == nil || apierrors.IsNotFound(err) {
+			return nil
+		}
+		time.Sleep(3 * time.Second)
+	}
+
+	return fmt.Errorf("timed out waiting for pod %s to be deleted: %w", podName, err)
+}
+
+// getOldestVersion returns the oldest version of the machines.
+func getOldestVersion(machines []clusterv1.Machine) (v string) {
+	for _, m := range machines {
+		if m.Spec.Version == nil {
+			// weird!
+			continue
+		}
+
+		if v == "" {
+			v = semver.MajorMinor(*m.Spec.Version)
+			continue
+		}
+
+		if semver.Compare(v, *m.Spec.Version) > 0 {
+			v = semver.MajorMinor(*m.Spec.Version)
 		}
 	}
-	return nil
+
+	return
+}
+
+func isMachineUpgraded(m clusterv1.Machine, newVersion string) bool {
+	if m.Spec.Version == nil {
+		return false
+	}
+	machineVersion := semver.MajorMinor(*m.Spec.Version)
+	return semver.Compare(machineVersion, newVersion) == 0
 }

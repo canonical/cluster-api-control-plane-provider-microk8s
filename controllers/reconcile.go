@@ -142,8 +142,12 @@ func (r *MicroK8sControlPlaneReconciler) reconcileMachines(ctx context.Context, 
 	var oldVersion, newVersion string
 
 	if numMachines > 0 {
+		var err error
 		sort.Sort(SortByCreationTimestamp(machines))
-		oldVersion = getOldestVersion(machines)
+		oldVersion, err = getOldestVersion(machines)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to get oldest version: %w", err)
+		}
 		newVersion = semver.MajorMinor(mcp.Spec.Version)
 	}
 
@@ -787,7 +791,8 @@ func waitForPodDeletion(ctx context.Context, kubeclient *kubernetesClient, podNa
 }
 
 // getOldestVersion returns the oldest version of the machines.
-func getOldestVersion(machines []clusterv1.Machine) (v string) {
+func getOldestVersion(machines []clusterv1.Machine) (string, error) {
+	var v string
 	for _, m := range machines {
 		if m.Spec.Version == nil {
 			// weird!
@@ -804,7 +809,10 @@ func getOldestVersion(machines []clusterv1.Machine) (v string) {
 		}
 	}
 
-	return
+	if v == "" {
+		return "", fmt.Errorf("no version found")
+	}
+	return v, nil
 }
 
 func isMachineUpgraded(m clusterv1.Machine, newVersion string) bool {
@@ -812,5 +820,6 @@ func isMachineUpgraded(m clusterv1.Machine, newVersion string) bool {
 		return false
 	}
 	machineVersion := semver.MajorMinor(*m.Spec.Version)
+	newVersion = semver.MajorMinor(newVersion) // just being extra careful
 	return semver.Compare(machineVersion, newVersion) == 0
 }
